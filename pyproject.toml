@@ -1,7 +1,20 @@
 [project]
 name = "jev-init"
 version = "0.1.0"
-description = "Add your description here"
+description = "Resume screening demo using the TypeSafe AI System One API"
 readme = "README.md"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "typesafe-sdk>=0.7.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

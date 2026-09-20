@@ -19,6 +19,7 @@ uv.lock
 .env
 .env.*
 !.env.example
+secrets.toml
 
 # Testing
 .pytest_cache/
