@@ -13,7 +13,7 @@ build/
 # uv
 .venv/
 .uv/
-uv.lock
+# uv.lock is committed so two machines get the same dependencies
 
 # env / secrets
 .env
@@ -37,3 +37,6 @@ htmlcov/
 
 # macOS
 .DS_Store
+
+# ruff
+.ruff_cache/

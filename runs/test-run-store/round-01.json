@@ -1,0 +1,68 @@
+{
+  "number": 1,
+  "reviewed": true,
+  "improvement": null,
+  "draft": {
+    "text": "Jane Smith\nSoftware Engineer\n\nBuilt things.",
+    "metrics": {
+      "model": "fake-model",
+      "latency_ms": 0.1,
+      "prompt_tokens": 200,
+      "completion_tokens": 100,
+      "total_tokens": 300
+    }
+  },
+  "review": {
+    "scores": {
+      "jd_alignment": 3.0,
+      "evidence_quality": 3.0,
+      "jd_keyword_coverage": 3.0,
+      "clarity_structure": 3.0,
+      "impact_ownership": 3.0
+    },
+    "confidences": {
+      "jd_alignment": 0.9,
+      "evidence_quality": 0.9,
+      "jd_keyword_coverage": 0.9,
+      "clarity_structure": 0.9,
+      "impact_ownership": 0.9
+    },
+    "levels": {
+      "jd_alignment": 3,
+      "evidence_quality": 3,
+      "jd_keyword_coverage": 3,
+      "clarity_structure": 3,
+      "impact_ownership": 3
+    },
+    "quality": 0.75,
+    "guardrails": {
+      "invents_metrics": 0.05,
+      "invents_facts": 0.05,
+      "inflates_scope": 0.05
+    },
+    "lines": [
+      {
+        "text": "Software Engineer",
+        "support": 0.9
+      },
+      {
+        "text": "Built things.",
+        "support": 0.9
+      }
+    ],
+    "reused_lines": 0,
+    "biggest_gap": "jd_alignment",
+    "biggest_gap_confidence": 0.8,
+    "gap_distribution": {
+      "jd_alignment": 0.8
+    },
+    "metrics": {
+      "model": "fake-model",
+      "request_id": "fake-req-001",
+      "latency_ms": 0.0,
+      "input_tokens": 100,
+      "output_tokens": 50,
+      "total_tokens": 150
+    }
+  }
+}

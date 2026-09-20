@@ -1,0 +1,33 @@
+Senior Backend Engineer — Platform Services
+
+About the role
+We are hiring a senior backend engineer to own core services behind our logistics
+platform. You will design and operate the APIs that every customer integration
+depends on, and you will be the technical owner for reliability as we scale past
+one billion events a month.
+
+What you will do
+- Own the design and delivery of backend services end to end, from schema to
+  production operations.
+- Drive observability and reliability work: SLOs, tracing, and incident reviews.
+- Lead technical design reviews and mentor mid-level engineers on the team.
+- Improve the performance and cost of high-throughput event ingestion.
+- Partner with product and data teams on new platform capabilities.
+
+What we are looking for
+- 5+ years of professional backend engineering experience, with Python as your
+  primary language.
+- Strong experience designing and operating distributed systems in production.
+- Deep knowledge of PostgreSQL and data modelling; experience with Redis or a
+  similar cache layer.
+- Hands-on experience with Kubernetes and containerized deployments in a cloud
+  environment (AWS preferred).
+- Experience with observability tooling: metrics, distributed tracing, alerting.
+- Track record of owning services on call, including incident response and
+  post-incident follow-through.
+- Experience mentoring engineers and leading technical design discussions.
+- Go is a plus; event streaming (Kafka or similar) is a plus.
+
+How we work
+Small teams, direct ownership, written design docs. We expect engineers at this
+level to set direction for their area rather than wait for tickets.

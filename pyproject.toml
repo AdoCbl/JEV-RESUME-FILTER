@@ -1,20 +1,37 @@
 [project]
-name = "jev-init"
-version = "0.1.0"
-description = "Resume screening demo using the TypeSafe AI System One API"
+name = "jev-resume-polisher"
+version = "0.2.0"
+description = "Iterative resume polisher: any OpenAI-compatible LLM writes, JEV reviews, scores, and fact-checks"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "openai>=1.40",
     "typesafe-sdk>=0.7.0",
 ]
 
+[project.scripts]
+resume-polisher = "polisher.cli:main"
+
 [dependency-groups]
 dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
     "ruff>=0.9",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--tb=short -q"
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"polisher/page.py" = ["E501"]
+"polisher/cli.py" = ["E501"]
+"evals/*.py" = ["E402", "E501"]
+"tests/*" = ["E501"]

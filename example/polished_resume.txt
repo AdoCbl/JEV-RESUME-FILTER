@@ -1,0 +1,32 @@
+Jordan Avery
+jordan.avery@example.com | (555) 014-2288 | linkedin.com/in/jordanavery | Austin, TX
+
+SUMMARY
+Backend engineer with six years of experience on services including a shipment tracking API and a retail inventory platform. Python is my primary language, with some Go, plus PostgreSQL, Redis, Docker, and Kubernetes (basic). On-call and incident response for the platform; aiming at platform services and infrastructure work.
+
+EXPERIENCE
+
+Vantage Logistics — Software Engineer II
+Mar 2022 - Present
+- Maintained the internal shipment tracking API used by the operations team.
+- Contributed to a team effort that reduced p95 latency on the tracking API.
+- Took on-call shifts and worked incident response for the platform.
+- Moved the rate-calculation endpoints as my part of the order service migration from a monolith to smaller services.
+- Wrote the Python client library internal teams use to talk to the tracking API.
+- Reviewed pull requests and mentored two interns during the summer.
+
+Bluefin Retail Systems — Software Developer
+Jun 2019 - Feb 2022
+- Built and maintained Django REST endpoints for the inventory platform, including the bulk stock adjustment feature used by about 400 stores.
+- Wrote PostgreSQL queries and migrations for the inventory platform.
+- Contributed to setting up the CI pipeline in Jenkins, which reduced deploys from weekly to daily.
+- Fixed bugs reported by the support team and wrote tests for the fixes.
+
+PROJECTS
+- Wrote sidecar, a small Go service that proxies requests to the tracking API for mobile clients, on my own time; about 30 users internally.
+
+SKILLS
+Python, Go, PostgreSQL, Redis, Docker, Kubernetes (basic), Django, Flask, Jenkins, Git, REST APIs, on-call, incident response.
+
+EDUCATION
+BSc Computer Science, University of Texas at Austin, 2019
