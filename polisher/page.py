@@ -1,7 +1,17 @@
-"""The HTML view: a version timeline, JEV's scores, and a diff of what changed.
+"""The HTML view: the verdict, the decisions it forces, the draft, and the evidence.
 
 One self-contained page — no CDN, no build step. The run payload is embedded for the
 first paint and re-fetched from ``/api/report`` while the loop is still running.
+
+The design follows https://typesafe.ai: paper and black ink, one halftone accent spent on
+the only block that asks for a decision, heavy display type at tight leading, hanging
+monospace micro-labels, two-pixel borders with a hard offset shadow, and corner ticks
+framing the sections. Monospace carries anything a reader might compare; the display face
+carries the one number the page exists to report.
+
+The order is the order a decision is made: what the draft scored, what a person has to
+rule on, what the draft says, why the number came out that way, and only then the
+evidence behind it.
 """
 
 import json
@@ -15,207 +25,419 @@ _TEMPLATE = """<!doctype html>
 <title>Resume polisher — report</title>
 <style>
 :root{
-  --bg:#0e1014; --panel:#161a21; --panel2:#1d222c; --border:#272d39;
-  --text:#e7eaf0; --muted:#98a1b1; --accent:#c264ff; --good:#3ddc97; --bad:#ff6b6b; --warn:#ffc857;
+  --paper:#fefefe; --ink:#1e1e1e; --ink-2:rgba(30,30,30,.86);
+  --mute:rgba(30,30,30,.5); --rule:rgba(30,30,30,.22); --wash:#f3f1ef;
+  /* The TypeSafe palette, sampled from the site: pink, magenta and sage are the only hues
+     it uses, over paper, ink and three greys. */
+  --pink:#f386a1; --magenta:#d45bb2; --sage:#abbab9;
+  --grey:#dedede; --grey-2:#e5e5e5;
+  /* A darker step of the same three hues. The palette is bright, and the numbers on this
+     page are small text, so they need a step that stays legible on paper. */
+  --pink-ink:#a83a56; --magenta-ink:#96227f; --sage-ink:#4f6462;
+  --shadow:6px 6px 0 var(--ink);
+  --halftone:radial-gradient(rgba(30,30,30,.28) 1.15px, transparent 1.35px);
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:"Helvetica Neue",Helvetica,Inter,ui-sans-serif,system-ui,-apple-system,Arial,sans-serif;
 }
 *{box-sizing:border-box}
-/* This is a page for a browser window, so it is laid out for one: a hard ceiling so a wide
-   monitor does not stretch a diff to 2000px, and two columns from a laptop width up. */
-body{margin:0 auto;max-width:1640px;background:var(--bg);color:var(--text);
-  font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
-header{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;
-  padding:16px 22px;border-bottom:1px solid var(--border)}
-h1{margin:0;font-size:15px;letter-spacing:.02em}
-.toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 22px;
-  border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:5}
-.sep{width:1px;height:22px;background:var(--border);margin:0 2px}
-button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px;
-  padding:7px 12px;font:inherit;cursor:pointer;transition:border-color .12s}
-button:hover:not(:disabled){border-color:var(--accent)}
-button:disabled{opacity:.4;cursor:default}
-button.primary{border-color:var(--accent);background:#26183a}
-button:focus-visible,.chip:focus-visible,.toggle input:focus-visible,
-input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-kbd{background:var(--panel2);border:1px solid var(--border);border-bottom-width:2px;
-  border-radius:4px;padding:0 5px;font:inherit;font-size:11.5px}
-.toggle{display:flex;gap:6px;align-items:center;color:var(--muted);cursor:pointer;user-select:none}
-.timeline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto}
-/* Below a wide desktop the versions take their own row rather than breaking the row in
-   the middle of the actions. */
-@media (max-width:1400px){.timeline{flex-basis:100%;margin-left:0}}
-.chip{display:flex;gap:7px;align-items:center;border:1px solid var(--border);border-radius:999px;
-  padding:4px 10px;font-size:13px;background:var(--panel);cursor:pointer}
-.chip.sel{border-color:var(--accent);background:#231535}
-.chip .n{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
-/* Two columns: what the draft scored beside what the draft says. The wide column gets the
-   text-shaped views (diff, ledger, coverage) because they have the longest strings. The
-   sidebar gives way before the text does, and only a genuinely narrow window stacks. */
-main{display:grid;grid-template-columns:clamp(300px,26%,380px) minmax(0,1fr);gap:18px;
-  padding:18px 22px 34px;align-items:start}
-@media (max-width:1000px){main{grid-template-columns:1fr}
-  /* Narrow: one column, the draft first, because that is what the page is for. */
-  .wide{order:-1}}
-.side,.wide{display:flex;flex-direction:column;gap:14px;min-width:0}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px}
-.card:empty{display:none}
-.card h2{margin:0 0 12px;font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:var(--muted)}
-.muted{color:var(--muted)}
-.big{font-size:34px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1}
-.row{display:flex;gap:10px;align-items:center;margin:7px 0}
-.row .label{flex:0 0 150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bar{flex:1;height:7px;border-radius:4px;background:#242a35;overflow:hidden;min-width:60px}
-.bar > i{display:block;height:100%;background:var(--accent)}
-.bar.good > i{background:var(--good)}
-.bar.bad > i{background:var(--bad)}
-.num{font-variant-numeric:tabular-nums;min-width:44px;text-align:right}
-.delta{font-variant-numeric:tabular-nums;font-size:12px;min-width:52px;text-align:right}
-.up{color:var(--good)} .down{color:var(--bad)} .flat{color:var(--muted)}
-/* One measurement: its numbers on a line, the bar underneath. A long name gets the whole
-   line to itself instead of being cut off to make room for a bar beside it. */
-.dim{margin:9px 0}
-.dim .head{display:flex;gap:8px;align-items:baseline}
-.dim .head .label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dim .head .lv{flex:0 0 auto;color:var(--muted);font-size:11px;border:1px solid var(--border);
-  border-radius:4px;padding:0 4px}
-.dim .head .meta{flex:0 0 auto;color:var(--muted);font-size:12px;white-space:nowrap}
-.dim > .bar{display:block;height:6px;margin-top:4px}
-/* Flagged lines get their own block: the line, then the decision, so a two-line bullet
-   does not push its own buttons out of the card. */
-.flagged{list-style:none;margin:8px 0 0;padding:0}
-.flagged li{border-top:1px solid var(--border);padding:8px 0}
-.flagged .acts{display:flex;gap:6px;margin-top:6px}
-.flagged .acts button{padding:3px 9px;font-size:12px}
-.badge{border:1px solid var(--border);border-radius:999px;padding:2px 9px;font-size:12px;color:var(--muted)}
-.badge.live{border-color:var(--accent);color:var(--accent)}
-.badge.blocked{border-color:var(--bad);color:var(--bad)}
-.list{margin:6px 0 0;padding-left:18px}
-.list li{margin:3px 0}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
-.diff{border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--panel)}
-.diff .head{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;
-  padding:12px 16px;border-bottom:1px solid var(--border);background:var(--panel2)}
-.diff .body{max-height:calc(100vh - 260px);overflow:auto}
-.line{display:grid;grid-template-columns:42px 42px 1fr auto;gap:10px;padding:1px 12px;
-  white-space:pre-wrap;word-break:break-word}
-.line .g{color:#5d6675;text-align:right;font-variant-numeric:tabular-nums;
-  font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;user-select:none}
-.line .t{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px}
-.line.add{background:rgba(61,220,151,.09);border-left:3px solid var(--good)}
-.line.remove{background:rgba(255,107,107,.09);border-left:3px solid var(--bad);color:#d8bfc4}
-.line.remove .t{text-decoration:line-through;text-decoration-color:rgba(255,107,107,.5)}
-.line.skip{color:var(--muted);font-style:italic;justify-content:center;padding:5px 12px;
-  border-top:1px dashed var(--border);border-bottom:1px dashed var(--border);display:block;text-align:center}
-details summary{cursor:pointer;color:var(--muted)}
-.src-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:0 5px;font-size:11px;border-radius:3px;line-height:1;vertical-align:middle}
-.src-btn:hover{color:var(--text)}
-.src-row{display:none;padding:2px 12px 6px 100px;font-size:12px;background:rgba(100,100,160,.04);border-bottom:1px solid var(--border)}
-.src-row.open{display:block}
-.wslider-row{display:flex;gap:6px;align-items:center;font-size:12px;white-space:nowrap}
-.wslider-row input[type=range]{width:64px}
-footer{padding:0 22px 30px;color:var(--muted)}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}
-.note{color:var(--muted);font-size:12.5px}
-.star{color:var(--warn)}
+/* A page for a browser window: a ceiling so a diff does not stretch to 2000px, and one
+   column, because the report has a reading order. */
+body{margin:0 auto;max-width:1300px;padding:0 30px 44px;background:var(--paper);
+  color:var(--ink-2);font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+h1,h2,p{margin:0}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
   clip:rect(0,0,0,0);white-space:nowrap;border:0}
-/* Grounding ledger: the distribution behind the mean, with the uncertain band visible. */
-.unc{color:var(--warn)} .bad{color:var(--bad)} .ok{color:var(--good)}
-.ledger{list-style:none;margin:8px 0 0;padding:0;max-height:360px;overflow:auto}
-.ledger li{border-top:1px solid var(--border);padding:7px 0}
-.ledger .ln{display:flex;gap:8px;align-items:baseline}
-.ledger .ln .t{flex:1;min-width:0;word-break:break-word}
-.ledger .p{font-variant-numeric:tabular-nums;min-width:34px;text-align:right;flex:0 0 34px}
-.claim{display:flex;gap:8px;align-items:baseline;padding:1px 0 1px 12px;font-size:12px;
-  color:var(--muted)}
-/* One claim per line, clipped rather than wrapped: the claim set is a distribution to
-   scan, and the full text is in the line above and on hover. The text shrinks to fit so a
-   marker can follow it rather than being pushed to the far edge of the row. */
+
+/* ── The two voices: display type for the one number, mono for everything read as data ── */
+.display{color:var(--ink);font-weight:500;line-height:.86;letter-spacing:-.028em;
+  text-transform:capitalize}
+/* No text-transform on .badge, #paths or #stop: those carry run state, and a status a
+   reader has to parse should read exactly as the run reports it. */
+.label{font:400 10.5px/1.4 var(--mono);letter-spacing:.06em;text-transform:capitalize;
+  color:var(--ink-2)}
+/* A mono label that is a sentence rather than a title keeps its own case. */
+.label.plain{text-transform:none}
+.label-block{border-left:1px solid var(--ink);min-height:22px;padding-left:12px}
+.muted{color:var(--mute)}
+.mono{font-family:var(--mono)}
+
+/* ── Shell ─────────────────────────────────────────────────────────────────── */
+.topbar{display:flex;flex-wrap:wrap;align-items:stretch;margin:26px 0 0;
+  border:2px solid var(--ink)}
+.topbar > *{display:flex;align-items:center;min-width:0;padding:9px 13px;
+  border-right:2px solid var(--ink)}
+.topbar > *:last-child{border-right:none}
+.brand{background:var(--ink);color:var(--paper);font:400 11px/1 var(--mono);
+  letter-spacing:.06em;text-transform:capitalize;white-space:nowrap}
+.topbar h1{color:var(--ink);font-size:15px;font-weight:600;letter-spacing:-.005em;
+  white-space:nowrap}
+#paths{display:block;flex:1 1 auto;align-self:stretch;padding:9px 13px;
+  font:400 11.5px/1.6 var(--mono);color:var(--mute);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.badge{font:400 11.5px/1 var(--mono);letter-spacing:.04em;border:1px solid var(--ink);
+  padding:4px 8px;white-space:nowrap}
+.badge:empty{display:none}
+.badge.live{background:var(--ink);color:var(--paper)}
+.badge.blocked{background:var(--pink);border-color:var(--pink);color:var(--ink)}
+/* The run's outcome, on a pink band the way the reference bands its sections: the state on
+   the left, the reason the loop gave on the right. */
+#stop{display:flex;flex-wrap:wrap;gap:4px 16px;justify-content:space-between;
+  align-items:baseline;background:var(--pink);color:var(--ink);padding:8px 13px;
+  font:400 11.5px/1.5 var(--mono);letter-spacing:.03em}
+#stop .state{letter-spacing:.08em;text-transform:capitalize;white-space:nowrap}
+#stop .detail{min-width:0;text-align:right;color:rgba(30,30,30,.72)}
+
+.page{position:relative}
+.toolbar{position:sticky;top:0;z-index:6;display:flex;flex-wrap:wrap;gap:9px;
+  align-items:center;padding:10px 12px;margin:26px 0 30px;background:var(--paper);
+  border:2px solid var(--ink);box-shadow:var(--shadow)}
+.timeline{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.tools{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-left:auto}
+.status-note{flex:1 1 100%;font:400 11.5px/1.5 var(--mono);color:var(--sage-ink)}
+.status-note:empty{display:none}
+.chip{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;cursor:pointer;
+  background:var(--paper);border:1px solid var(--ink);color:var(--ink);
+  font:400 11.5px/1 var(--mono);letter-spacing:.03em;text-transform:capitalize}
+.chip:hover{background:var(--wash)}
+.chip.sel{background:var(--magenta);color:var(--ink)}
+.chip .n{color:var(--mute);font-variant-numeric:tabular-nums}
+.chip.sel .n{color:rgba(30,30,30,.66)}
+/* The timeline marks two different things: the draft the loop kept, and the one on disk. */
+.star{color:var(--magenta-ink)}
+.chip.sel .star{color:var(--ink)}
+.star.muted{color:rgba(30,30,30,.35)}
+.saved{color:var(--sage-ink)}
+.chip.sel .saved{color:var(--ink)}
+
+button{padding:7px 11px;cursor:pointer;background:var(--paper);border:1px solid var(--ink);
+  color:var(--ink);font:400 11.5px/1 var(--mono);letter-spacing:.03em}
+button:hover:not(:disabled){background:var(--ink);color:var(--paper)}
+button:disabled{opacity:.3;cursor:default}
+button.primary{background:var(--ink);color:var(--paper)}
+button.primary:hover:not(:disabled){background:#000;color:var(--paper)}
+/* The one pair of buttons that changes the run: proceed, or stop the line. */
+button.keep{background:var(--sage);border-color:var(--ink);color:var(--ink)}
+button.keep:hover:not(:disabled){background:var(--sage-ink);color:var(--paper)}
+button.drop{background:var(--pink);border-color:var(--ink);color:var(--ink)}
+button.drop:hover:not(:disabled){background:var(--pink-ink);color:var(--paper)}
+button:focus-visible,.chip:focus-visible,.editable:focus-visible{outline:2px solid var(--ink);
+  outline-offset:2px}
+kbd{border:1px solid var(--ink);background:var(--paper);padding:1px 5px;
+  font:400 10.5px/1.5 var(--mono)}
+input[type=checkbox],input[type=range]{accent-color:var(--ink)}
+.toggle{display:inline-flex;gap:6px;align-items:center;cursor:pointer;user-select:none;
+  font:400 11.5px/1 var(--mono);letter-spacing:.03em;color:var(--ink-2)}
+.note{font:400 11.5px/1.45 var(--mono);color:var(--mute)}
+.note.warn{color:var(--magenta-ink)}
+
+.rubric{margin:-30px 0 30px;padding:14px 12px;background:var(--paper);
+  border:2px solid var(--ink);border-top:none;box-shadow:var(--shadow)}
+.rubric-inner{display:flex;flex-wrap:wrap;gap:14px 24px;align-items:flex-start}
+.wsliders{display:grid;grid-template-columns:repeat(auto-fit,minmax(288px,1fr));gap:9px 30px}
+.wslider-row{display:flex;gap:8px;align-items:center;white-space:nowrap;
+  font:400 11.5px/1 var(--mono);text-transform:capitalize}
+.wslider-row input[type=range]{width:72px}
+.rubric-foot{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+
+/* ── Sections, framed by corner ticks ──────────────────────────────────────── */
+main > section{margin:0 0 30px}
+main > section:empty{display:none}
+main > section > .win + .win{margin-top:30px}
+/* Four corner marks drawn from gradients: the reference frames its bands this way, and it
+   needs no extra elements in the markup the renderer builds. */
+.frame{position:relative;padding:26px 26px 22px}
+.frame::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background-image:
+    linear-gradient(var(--magenta),var(--magenta)),linear-gradient(var(--magenta),var(--magenta)),
+    linear-gradient(var(--magenta),var(--magenta)),linear-gradient(var(--magenta),var(--magenta)),
+    linear-gradient(var(--magenta),var(--magenta)),linear-gradient(var(--magenta),var(--magenta)),
+    linear-gradient(var(--magenta),var(--magenta)),linear-gradient(var(--magenta),var(--magenta));
+  background-repeat:no-repeat;
+  background-size:15px 1px,1px 15px,15px 1px,1px 15px,15px 1px,1px 15px,15px 1px,1px 15px;
+  background-position:left top,left top,right top,right top,left bottom,left bottom,
+    right bottom,right bottom}
+
+/* ── Windows: the block, its bar, its contents ────────────────────────────── */
+/* The bar is the section's colour, always with ink on it: the palette is light enough that
+   ink keeps ~5:1 or better on pink, magenta and sage, so the coloured bands stay readable
+   and the black bar is left for the draft, which is the one block that is not a judgment. */
+.win{border:2px solid var(--ink);box-shadow:var(--shadow);background:var(--paper)}
+.win-bar{display:flex;flex-wrap:wrap;gap:5px 16px;align-items:baseline;
+  justify-content:space-between;padding:8px 13px;background:var(--ink);color:var(--paper);
+  font:400 10.5px/1.5 var(--mono);letter-spacing:.06em;text-transform:capitalize}
+.win.magenta > .win-bar{background:var(--magenta);color:var(--ink)}
+.win.pink > .win-bar{background:var(--pink);color:var(--ink)}
+.win.sage > .win-bar{background:var(--sage);color:var(--ink)}
+.win.grey > .win-bar{background:var(--grey);color:var(--ink)}
+.win-bar .t{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.win-bar .r{min-width:0;text-align:right;color:rgba(254,254,254,.6);letter-spacing:.02em;
+  text-transform:none;font-size:11.5px}
+.win.pink > .win-bar .r, .win.magenta > .win-bar .r, .win.sage > .win-bar .r,
+.win.grey > .win-bar .r{color:rgba(30,30,30,.62)}
+.win-bar .r .up{color:#a8e0bd}
+.win-bar .r .down{color:#efa9a2}
+.win-bar .r .flat{color:rgba(254,254,254,.6)}
+summary.win-bar{cursor:pointer;list-style:none}
+summary.win-bar::-webkit-details-marker{display:none}
+summary.win-bar:hover{filter:brightness(.92)}
+.caret::before{content:"▸";margin-right:8px;opacity:.7}
+details[open] > summary .caret::before{content:"▾"}
+.band-head{display:flex;flex-wrap:wrap;gap:4px 16px;justify-content:space-between;
+  align-items:baseline;padding:11px 16px;border-bottom:1px solid var(--ink)}
+.band-head .r{font:400 11px/1.5 var(--mono);color:var(--mute)}
+.lead{padding:18px 16px;font-size:17px;line-height:1.4;letter-spacing:.02em;
+  color:var(--ink-2);max-width:74ch}
+
+/* ── Verdict: the one number, at display size ─────────────────────────────── */
+.hero-head{display:flex;flex-wrap:wrap;gap:6px 18px;justify-content:space-between;
+  align-items:baseline;padding-bottom:12px;border-bottom:2px solid var(--magenta)}
+.hero-body{display:flex;flex-wrap:wrap;gap:16px 44px;align-items:flex-end;padding:22px 0 0}
+/* The one number the page exists to report, in the palette's magenta. At this size it needs
+   3:1, not 4.5:1, so the bright brand step is the right one here. */
+.hero-number{font-weight:500;font-size:clamp(66px,9.4vw,126px);line-height:.82;
+  letter-spacing:-.045em;color:var(--magenta);font-variant-numeric:tabular-nums}
+.hero-side{min-width:0;flex:1 1 300px;padding-bottom:6px}
+.hero-line{font-size:17px;line-height:1.45;letter-spacing:.02em;color:var(--ink-2)}
+.hero-line b{color:var(--ink);font-weight:600}
+.hero-line + .hero-line{margin-top:4px}
+.hero-line.muted{color:var(--mute);font-size:15px}
+.hero-line .risk{color:var(--pink-ink);font-weight:600}
+.hero-line .safe{color:var(--sage-ink);font-weight:600}
+.hero-eyebrow{color:var(--magenta-ink)}
+.tag{display:inline-block;margin-left:10px;padding:2px 6px;border:1px solid var(--ink);
+  color:var(--ink);font-size:10.5px;letter-spacing:.06em;text-transform:capitalize;
+  vertical-align:3px}
+.tag.bad{background:var(--pink);border-color:var(--pink);color:var(--ink)}
+.hero-trust{display:flex;flex-wrap:wrap;gap:7px 22px;align-items:baseline;margin-top:24px;
+  padding-top:11px;border-top:1px dotted var(--rule);
+  font:400 11.5px/1.6 var(--mono);color:var(--mute)}
+.hero-trust b{color:var(--ink);font-weight:400}
+.hero-trust .weakest{flex-basis:100%;min-width:0;color:var(--ink-2)}
+.hero-trust .unsupported b{color:var(--pink-ink)}
+.hero-trust .uncertain b{color:var(--magenta-ink)}
+.hero-trust .carried b{color:var(--sage-ink)}
+
+/* ── Measurements: a name, a leader, a number, and the bar it came from ───── */
+.rows{padding:0}
+.row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:0 18px;
+  align-items:baseline;padding:12px 16px 10px;border-bottom:1px dotted var(--rule)}
+.row:last-child{border-bottom:none}
+/* The name and the dots share the first column so the dots really do lead from the name
+   to the number, whatever the name's length. */
+.row .name{display:flex;align-items:baseline;gap:11px;min-width:0;font-size:15px;
+  letter-spacing:.01em;color:var(--ink);text-transform:capitalize}
+.row .name > span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.row .dots{flex:1 1 24px;min-width:18px;transform:translateY(-4px);
+  border-bottom:1px dotted var(--rule)}
+.row .value{font:400 15px/1.4 var(--mono);color:var(--ink);font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+.row .value .of{color:var(--mute);font-size:12px}
+.row .meta{font:400 11px/1.5 var(--mono);color:var(--mute);white-space:nowrap;min-width:0}
+.row .meta.warn{color:var(--pink-ink)}
+/* Bar colour carries the reading so the row does not have to be read: sage under the line,
+   magenta scored, pink a risk. The track stays paper, because the light steps of the palette
+   sit too close to a grey track to read as a fill. */
+.row .meter{grid-column:1 / -1;display:block;margin-top:8px;height:7px;background:var(--paper);
+  border:1px solid var(--ink)}
+.row .meter > i{display:block;height:100%;background:var(--magenta)}
+.row .meter.safe > i{background:var(--sage-ink)}
+.row .meter.risk > i{background:var(--pink)}
+.row .meter.plain > i{background:var(--ink)}
+
+/* One hue per reading, used everywhere the same reading appears. */
+.risk{color:var(--pink-ink)} .safe{color:var(--sage-ink)} .scored{color:var(--magenta-ink)}
+.ok{color:var(--sage-ink)} .unc{color:var(--magenta-ink)} .bad{color:var(--pink-ink)}
+.up{color:var(--sage-ink)} .down{color:var(--pink-ink)} .flat{color:var(--mute)}
+
+/* ── The decision band: the one place the accent is spent ─────────────────── */
+.decide{padding:20px 16px;background-color:var(--pink);background-image:var(--halftone);
+  background-size:5px 5px;background-repeat:repeat}
+.decide ul{list-style:none;margin:0;padding:0}
+.decide li{background:var(--paper);border:2px solid var(--ink);box-shadow:4px 4px 0 var(--ink);
+  padding:15px 17px}
+.decide li + li{margin-top:16px}
+.decide .quote{display:flex;flex-wrap:wrap;gap:2px 16px;justify-content:space-between;
+  margin-bottom:9px;font:400 10.5px/1.5 var(--mono);letter-spacing:.06em;color:var(--mute)}
+.decide .line-text{font-size:16px;line-height:1.45;letter-spacing:.015em;color:var(--ink)}
+.decide .why{margin-top:9px;padding-top:9px;border-top:1px dotted var(--rule);
+  font:400 12px/1.55 var(--mono);color:var(--pink-ink)}
+.decide .acts{display:flex;flex-wrap:wrap;gap:9px;margin-top:13px}
+.decide .acts button{padding:9px 15px}
+.verdict-tag{display:inline-block;margin-left:10px;padding:2px 7px;border:1px solid var(--sage-ink);
+  color:var(--sage-ink);font:400 11px/1.5 var(--mono);letter-spacing:.04em;vertical-align:2px}
+.verdict-tag.rejected{border-color:var(--pink-ink);color:var(--pink-ink)}
+
+/* ── The draft: line numbers, a +/− column, the text, and its evidence ────── */
+.diff-body{max-height:74vh;overflow:auto}
+.line{display:grid;grid-template-columns:40px 40px 26px minmax(0,1fr) 106px;align-items:start;
+  padding:3px 0;font:400 11.5px/1.65 var(--mono);border-left:3px solid transparent;
+  border-bottom:1px dotted var(--rule)}
+.line .g{color:var(--mute);font-size:11px;text-align:right;padding-right:9px;user-select:none}
+.line .g.r{border-right:1px solid var(--rule)}
+.line .mark{text-align:center;color:var(--mute)}
+.line .t{min-width:0;padding-right:12px;white-space:pre-wrap;word-break:break-word;
+  color:var(--ink)}
+.line .act{padding-right:11px;text-align:right}
+/* Added and removed lines take the palette's two signal hues, so a scan of the diff reads
+   as colour rather than as two shades of grey. */
+.line.add{background:rgba(171,186,185,.26);border-left-color:var(--sage-ink)}
+.line.add .mark{color:var(--sage-ink)}
+.line.remove{background:rgba(243,134,161,.22);border-left-color:var(--pink-ink)}
+.line.remove .mark{color:var(--pink-ink)}
+.line.remove .t{color:var(--mute)}
+.line.eq .mark{color:transparent}
+.line.skip{display:block;padding:6px 14px;background:var(--grey-2);color:var(--mute);
+  border-left-color:transparent;border-bottom:1px dotted var(--rule);text-align:center;
+  font-size:11.5px}
+/* The evidence control is a link, not a button: it opens a footnote under the line. */
+.src-btn{background:none;border:none;padding:0;cursor:pointer;color:var(--sage-ink);
+  text-align:right;font:400 10.5px/1.65 var(--mono);letter-spacing:.04em;
+  text-decoration:underline;text-underline-offset:3px}
+button.src-btn:hover{background:none;color:var(--ink)}
+.src-btn.nosrc{color:var(--pink-ink);font-weight:600}
+.src-row{display:none;padding:11px 14px 13px 118px;background:var(--grey-2);color:var(--ink-2);
+  border-bottom:1px dotted var(--rule);font:400 11.5px/1.65 var(--mono)}
+.src-row.open{display:block}
+.src-row .no{color:var(--pink-ink)}
+
+/* ── Editing a draft, with the reviewer's verdict in the gutter ───────────── */
+.editrow{display:grid;grid-template-columns:28px minmax(0,1fr);align-items:start;
+  padding:2px 14px 2px 0;border-bottom:1px dotted var(--rule)}
+.editrow .dot{text-align:center;font:400 11px/2.3 var(--mono);color:var(--mute);cursor:help}
+.editrow .dot.unc{color:var(--magenta-ink)}
+.editrow .dot.bad{color:var(--pink-ink)}
+.editrow .dot.ok{color:var(--sage-ink)}
+.editable{outline:none;font:400 11.5px/1.65 var(--mono);color:var(--ink);
+  white-space:pre-wrap;word-break:break-word;padding:0 2px}
+.editable:focus{background:var(--wash)}
+
+/* ── Evidence behind the verdict ─────────────────────────────────────────── */
+.filters{display:flex;flex-wrap:wrap;gap:6px;padding:12px 16px;border-bottom:1px solid var(--ink)}
+.filters button{padding:5px 9px;font-size:11px}
+.filters button.on{background:var(--ink);color:var(--paper)}
+.ledger{list-style:none;margin:0;padding:0;max-height:440px;overflow:auto}
+.ledger li{padding:11px 16px;border-bottom:1px dotted var(--rule)}
+.ledger li:last-child{border-bottom:none}
+.ledger .ln{display:flex;gap:12px;align-items:baseline}
+.ledger .p{flex:0 0 38px;text-align:right;font:400 12px/1.65 var(--mono);
+  font-variant-numeric:tabular-nums}
+.ledger .t{flex:1;min-width:0;font-size:14px;line-height:1.5;letter-spacing:.01em;
+  color:var(--ink);word-break:break-word}
+/* One row per clause of a multi-clause line, clipped rather than wrapped: the claim set is
+   a distribution to scan, and the full text is in the line above and on hover. */
+.claim{display:flex;gap:9px;align-items:baseline;padding:3px 0 0 50px;
+  font:400 11px/1.65 var(--mono);color:var(--mute)}
 .claim .t{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.claim .fails{flex:0 0 auto;color:var(--bad);font-size:11px;text-transform:uppercase;
-  letter-spacing:.06em}
-.filters{display:flex;gap:6px;margin:8px 0 0;flex-wrap:wrap}
-.filters button{padding:3px 9px;font-size:12px}
-.filters button.on{border-color:var(--accent);background:#231535}
-/* Coverage: one row per requirement, and an empty cell where the candidate has nothing. */
-.cov{display:grid;grid-template-columns:18px 1fr;gap:3px 8px;margin:8px 0 0;font-size:12.5px}
-.cov .mark{text-align:center}
-.cov .mark.ok{color:var(--good)} .cov .mark.no{color:var(--muted)}
-.cov .ans{grid-column:2;color:var(--muted);font-size:12px;margin:0 0 7px}
-.meter{height:7px;border-radius:4px;background:#242a35;overflow:hidden;margin:5px 0}
-.meter > i{display:block;height:100%;background:var(--accent)}
-.meter.hot > i{background:var(--bad)}
-/* Live lint: the winning draft, editable, with the reviewer's verdict in the gutter. */
-.editrow{display:grid;grid-template-columns:22px 1fr;gap:8px;padding:1px 12px;align-items:start}
-.editrow .dot{text-align:center;color:var(--muted);cursor:help;font-size:11px;line-height:1.9}
-.editrow .dot.unc{color:var(--warn)} .editrow .dot.bad{color:var(--bad)} .editrow .dot.ok{color:var(--good)}
-.editable{outline:none;border-radius:3px;padding:0 4px;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;
-  white-space:pre-wrap;word-break:break-word}
-.editable:focus{background:#231535}
+.claim .fails{flex:0 0 auto;color:var(--pink-ink);font-size:10px;letter-spacing:.06em;
+  text-transform:capitalize}
+
+.cov{padding:0 16px}
+.cov-row{display:grid;grid-template-columns:22px minmax(0,1fr);gap:3px 11px;padding:12px 0;
+  border-bottom:1px dotted var(--rule)}
+.cov-row:last-child{border-bottom:none}
+.cov-row .mark{text-align:center;font:400 13px/1.5 var(--mono)}
+.cov-row .mark.ok{color:var(--sage-ink)}
+.cov-row .mark.no{color:var(--pink-ink)}
+.cov-row .req{font-size:15px;line-height:1.45;letter-spacing:.01em;color:var(--ink)}
+.cov-row .ans{grid-column:2;font:400 11px/1.6 var(--mono);color:var(--mute)}
+/* A requirement nothing answers is the point of the matrix, so it gets the attention hue. */
+.cov-row.open-req{background:rgba(243,134,161,.16);margin:0 -8px;padding-left:8px;
+  padding-right:8px}
+.cov-row.open-req .ans{color:var(--pink-ink)}
+details.sub{border-top:1px solid var(--ink)}
+details.sub > summary{display:flex;flex-wrap:wrap;gap:4px 16px;
+  justify-content:space-between;padding:11px 16px;cursor:pointer;list-style:none;
+  font:400 11px/1.5 var(--mono);letter-spacing:.04em;color:var(--mute)}
+details.sub > summary::-webkit-details-marker{display:none}
+details.sub > summary:hover{color:var(--ink)}
+.jd{margin:0;padding:14px 16px;background:var(--grey-2);
+  font:400 11.5px/1.7 var(--mono);color:var(--ink-2);white-space:pre-wrap;
+  max-height:240px;overflow:auto}
+
+.kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px 24px;padding:16px;
+  font:400 12px/1.6 var(--mono)}
+.kv .k{color:var(--magenta-ink);text-transform:capitalize}
+.cost-rows{padding:0 16px 16px}
+.cost-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 14px;
+  align-items:baseline;padding:11px 0;border-bottom:1px dotted var(--rule)}
+.cost-row:last-child{border-bottom:none}
+.cost-row .num{font-variant-numeric:tabular-nums;color:var(--mute)}
+.cost-row .meter{grid-column:1 / -1;margin-top:4px}
+
+footer{display:flex;flex-wrap:wrap;gap:10px 24px;align-items:baseline;padding-top:22px;
+  border-top:2px solid var(--ink);font:400 11px/1.6 var(--mono);color:var(--mute)}
+footer .keys{display:flex;flex-wrap:wrap;gap:9px;align-items:baseline;margin-left:auto}
+/* The colour key. Three hues carry three readings all over the page, so the page says so
+   once, in the place a reader ends up anyway. */
+.key{display:flex;flex-wrap:wrap;gap:8px 18px;flex-basis:100%;align-items:baseline}
+.key span{display:inline-flex;gap:7px;align-items:baseline}
+.key i{width:11px;height:11px;border:1px solid var(--ink);flex:0 0 auto;
+  transform:translateY(1px)}
+.key .k-sage i{background:var(--sage)}
+.key .k-pink i{background:var(--pink)}
+.key .k-magenta i{background:var(--magenta)}
+.key .k-sage{color:var(--sage-ink)}
+.key .k-pink{color:var(--pink-ink)}
+.key .k-magenta{color:var(--magenta-ink)}
 </style>
 </head>
 <body>
-<header>
-  <h1>Resume polisher</h1>
+<div class="topbar">
+  <span class="brand">resume polisher</span>
+  <h1>deepseek writes, jev judges</h1>
+  <span id="paths"></span>
   <span id="status" class="badge"></span>
-  <span id="paths" class="muted mono"></span>
-  <span id="stop" class="muted" style="margin-left:auto"></span>
-</header>
+</div>
+<div id="stop"></div>
 <!-- Rounds arrive on their own, so the newest one is announced rather than hunted for. -->
 <p id="live" class="sr-only" role="status" aria-live="polite"></p>
 
-<div class="toolbar">
-  <button id="undo" title="previous version (←)">← Undo</button>
-  <button id="next" title="next version (→)">Next →</button>
-  <span class="sep"></span>
-  <button id="save" class="primary" title="write this version to the output file">Save this version</button>
-  <span id="savestatus" class="note"></span>
-  <span class="sep"></span>
-  <label class="toggle"><input type="checkbox" id="hide" checked /> hide unchanged (h)</label>
-  <label class="toggle"><input type="checkbox" id="vsorig" /> compare original (c)</label>
-  <span class="sep"></span>
-  <button id="rubric-btn" title="rubric weight controls (w)">Weights ▸</button>
-  <button id="edit" title="edit this draft and re-check only the lines you change (e)">✎ Edit</button>
-  <button id="saveedit" class="primary" style="display:none" title="write the edited draft to the output file">Save edited draft</button>
-  <div id="timeline" class="timeline"></div>
-</div>
-<div id="rubric-panel" style="display:none;padding:10px 22px;border-bottom:1px solid var(--border);background:var(--bg)">
-  <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
-    <span class="muted" style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-top:4px">Re-weight</span>
-    <div id="wsliders" style="display:flex;flex-wrap:wrap;gap:10px"></div>
-    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:2px">
-      <span id="wsum" class="muted note"></span>
-      <button id="wreset" style="font-size:12px;padding:4px 8px">Reset</button>
-      <button id="wexport" style="font-size:12px;padding:4px 8px">Copy weights</button>
-      <span id="wreweight-note" class="note" style="color:var(--warn)"></span>
+<div class="page">
+  <div class="toolbar">
+    <div id="timeline" class="timeline"></div>
+    <div class="tools">
+      <button id="undo" title="previous version (←)">←</button>
+      <button id="next" title="next version (→)">→</button>
+      <label class="toggle" title="hide the lines this draft did not touch (h)"><input type="checkbox" id="hide" checked /> unchanged</label>
+      <label class="toggle" title="compare against the original resume rather than the previous round (c)"><input type="checkbox" id="vsorig" /> vs original</label>
+      <button id="rubric-btn" title="re-weight the rubric (w)">weights</button>
+      <button id="edit" title="edit this draft and re-check only the lines you change (e)">edit</button>
+      <button id="save" class="primary" title="write this version to the output file">save</button>
+      <button id="saveedit" class="primary" style="display:none" title="write the edited draft to the output file">save edit</button>
     </div>
+    <span id="savestatus" class="status-note"></span>
   </div>
-</div>
-
-<main>
-  <div class="side">
-    <div class="card" id="scores"></div>
-    <div class="card"><h2>Run totals</h2><div id="totals"></div></div>
-  </div>
-  <div class="wide">
-    <div class="card" style="padding:0;background:none;border:none">
-      <div class="diff">
-        <div class="head" id="diffhead"></div>
-        <div class="body" id="diff"></div>
+  <div id="rubric-panel" class="rubric" style="display:none">
+    <div class="rubric-inner">
+      <span class="label label-block">re-weight</span>
+      <div id="wsliders" class="wsliders"></div>
+      <div class="rubric-foot">
+        <span id="wsum" class="note"></span>
+        <button id="wreset">reset</button>
+        <button id="wexport">copy weights</button>
+        <span id="wreweight-note" class="note warn"></span>
       </div>
     </div>
-    <div class="card" id="flagged"></div>
-    <div class="card" id="ledger"></div>
-    <div class="card"><h2>Job description</h2>
-      <details><summary>show the target</summary>
-        <p class="mono" id="jd" style="white-space:pre-wrap"></p>
-      </details>
-      <div id="coverage"></div>
-    </div>
   </div>
-</main>
 
-<footer id="footer" class="note"></footer>
+  <main>
+    <section id="scores"></section>
+    <section id="flagged"></section>
+    <section>
+      <div class="win">
+        <div class="win-bar" id="diffhead"></div>
+        <div class="diff-body" id="diff"></div>
+      </div>
+    </section>
+    <section id="checks"></section>
+    <section id="ledger"></section>
+    <section id="coverage"></section>
+    <section id="totals"></section>
+  </main>
+</div>
+
+<footer id="footer"></footer>
 
 <script id="payload" type="application/json">__PAYLOAD__</script>
 <script>
@@ -233,188 +455,290 @@ const auditKey = (text) => String(text).trim().replace(/^[-•*–—·]+/, "").
 const versions = () => state.report.versions || [];
 const current = () => versions()[state.index] || null;
 const previous = () => versions()[state.index - 1] || null;
+const spaced = (name) => String(name).replace(/_/g, " ");
+// Dimension and check names are lowercase identifiers; these read as words except for the
+// two the reviewer knows by their capitals. Done with a map, not a word-boundary regex,
+// because a backslash in this template is eaten by the Python string it lives in.
+const ACRONYMS = { jd: "JD", api: "API" };
+const words = (name) => spaced(name).split(" ")
+  .map((word) => ACRONYMS[word] || word).join(" ");
 
-function bar(value, cls) {
-  const w = Math.max(0, Math.min(1, value)) * 100;
-  return `<span class="bar ${cls}"><i style="width:${w}%"></i></span>`;
+// Folded windows the reader opened. Every window is rebuilt from scratch on each poll, so
+// the open state has to live out here or a live run would keep shutting them.
+const _open = { ledger:true, coverage:true, totals:false };
+function foldWindow(id, title, meta, body, tone) {
+  return `<details class="win${tone ? " " + tone : ""}" data-fold="${id}"${
+    _open[id] ? " open" : ""}>
+    <summary class="win-bar"><span class="t"><span class="caret"></span>${title}</span>
+      <span class="r">${meta}</span></summary>${body}</details>`;
+}
+function bindWindows(root) {
+  root.querySelectorAll("details[data-fold]").forEach((card) => {
+    card.addEventListener("toggle", () => { _open[card.dataset.fold] = card.open; });
+  });
+}
+function meter(value, cls) {
+  const width = Math.max(0, Math.min(1, value)) * 100;
+  return `<span class="meter ${cls || ""}"><i style="width:${width.toFixed(1)}%"></i></span>`;
 }
 function delta(now, before, digits = 2) {
-  if (before === undefined || before === null) return `<span class="delta flat"></span>`;
-  const d = now - before;
-  const cls = Math.abs(d) < 0.005 ? "flat" : d > 0 ? "up" : "down";
-  const sign = d > 0 ? "+" : "";
-  return `<span class="delta ${cls}">${sign}${d.toFixed(digits)}</span>`;
+  if (before === undefined || before === null) return "";
+  const change = now - before;
+  const cls = Math.abs(change) < 0.005 ? "flat" : change > 0 ? "up" : "down";
+  return `<span class="delta ${cls}">${change > 0 ? "+" : ""}${change.toFixed(digits)}</span>`;
 }
-function scoreRows(v, prev) {
-  const cfg = state.report.config || {};
-  const order = cfg.dimension_order || Object.keys(v.review.scores);
-  return order.map((name) => {
-    const s = v.review.scores[name];
-    const before = prev && prev.review ? prev.review.scores[name].score : null;
-    const low = s.confidence < (cfg.confidence_floor ?? 0.6) ? " ⚠" : "";
-    return `<div class="dim">
-      <div class="head">
-        <span class="label" title="${esc(name)} — level ${s.level} of ${cfg.top_level}: ${esc(s.level_text)}">${esc(name)}</span>
-        <span class="lv" title="rubric level ${s.level} of ${cfg.top_level}">L${s.level}</span>
-        <span class="num">${s.score.toFixed(2)}/4</span>
-        ${delta(s.score, before)}
-        <span class="meta" title="reviewer confidence">${s.confidence.toFixed(2)}${low}</span>
-      </div>
-      ${bar(s.normalized, "")}
+// The overall a reader is looking at: the loop's own number, or the re-weighted one when the
+// sliders are off their defaults. Comparing a re-weighted draft to a loop number would be
+// two different scales in one delta, so the comparison follows the same definition.
+function scoreOf(version) {
+  if (!version || !version.review) return null;
+  const reweighted = _isReweighted() ? _recomputeOverall(version, _activeWeights()) : null;
+  return reweighted === null ? version.review.overall : reweighted;
+}
+// Which of the palette's three hues a reading gets. Chosen the same way everywhere, so the
+// same colour means the same thing in the verdict, the bars, the ledger and the diff.
+function bandClass(value, safeAt, riskBelow) {
+  return value >= safeAt ? "safe" : value >= riskBelow ? "" : "risk";
+}
+// One measurement as a leader row: the name, dots that carry the eye across to the number,
+// and the meter the number came from underneath. Same shape for a score and a probability,
+// so the two bands are read the same way. `cls` is the reading its bar is painted in.
+function leaderRow(name, value, of, meta, metaWarn, ratio, cls) {
+  return `<div class="row">
+      <span class="name"><span>${esc(words(name))}</span><span class="dots"></span></span>
+      <span class="value">${value}${of ? `<span class="of">${of}</span>` : ""}</span>
+      <span class="meta${metaWarn ? " warn" : ""}">${meta}</span>
+      ${meter(ratio, cls)}
     </div>`;
+}
+function dimensionRows(version, prev) {
+  const cfg = state.report.config || {};
+  const order = cfg.dimension_order || Object.keys(version.review.scores);
+  const floor = cfg.confidence_floor ?? 0.6;
+  return order.map((name) => {
+    const score = version.review.scores[name];
+    const before = prev && prev.review ? prev.review.scores[name].score : null;
+    const low = score.confidence < floor;
+    const meta = `level ${score.level}/${cfg.top_level}${low
+      ? ` · confidence only ${score.confidence.toFixed(2)}` : ""}`;
+    return leaderRow(name, score.score.toFixed(2), "/4", `${meta} ${delta(score.score, before)}`,
+                     low, score.normalized, bandClass(score.normalized, 0.75, 0.5));
   }).join("");
 }
-function guardrailRows(v) {
-  const g = v.review.guardrails || {};
-  return Object.entries(g).sort((a, b) => b[1] - a[1]).map(([name, p]) => `<div class="dim">
-    <div class="head"><span class="label">${esc(name)}</span>
-      <span class="num">${p.toFixed(2)}</span></div>
-    ${bar(p, "bad")}
-  </div>`).join("");
+function checkRows(version) {
+  const cfg = state.report.config || {};
+  const block = cfg.fabrication_block ?? 0.5;
+  const review = version.review;
+  const checks = Object.entries(review.guardrails || {}).sort((a, b) => b[1] - a[1]);
+  const rows = checks.map(([name, probability]) => {
+    const hot = probability >= block;
+    return leaderRow(name, probability.toFixed(2), "",
+                     hot ? `blocks at ${block.toFixed(2)}` : "under the block line",
+                     hot, probability, hot ? "risk" : "safe");
+  });
+  rows.push(leaderRow("mean line grounding", review.line_grounding.toFixed(2), "",
+    `over ${review.audited_lines} lines`, false, review.line_grounding,
+    bandClass(review.line_grounding, 0.8, 0.5)));
+  // The gate itself, last: the mean can be high while one line sinks the score, and the
+  // whole point of the number is that it is the worst signal, not the average one.
+  const risk = review.fabrication_risk;
+  rows.push(leaderRow("fabrication risk", risk.toFixed(2), "",
+    risk >= block ? `blocks at ${block.toFixed(2)}`
+      : "the loudest signal: the worst check or the weakest line",
+    risk >= block, risk, risk >= block ? "risk" : "safe"));
+  return rows.join("");
 }
 
 function renderScores() {
-  const v = current();
-  if (!v || !v.review) {
-    $("scores").innerHTML = `<h2>Original resume</h2>
-      <div class="big">—</div>
-      <p class="muted">The reviewer has not scored anything yet. Each round appears here
-      with its five dimension scores, its fabrication checks, and its line-by-line grounding.</p>`;
+  const el = $("scores");
+  const version = current();
+  if (!version || !version.review) {
+    el.innerHTML = `<div class="frame">
+      <div class="hero-head"><span class="label hero-eyebrow">verdict ......</span>
+        <span class="label plain">nothing scored yet</span></div>
+      <div class="hero-body"><div class="hero-side">
+        <p class="hero-line">Every round lands here with five dimension scores, three
+          fabrication checks, and a grounding verdict on each line of the draft. The run has
+          not judged anything yet.</p></div></div></div>`;
     return;
   }
-  const r = v.review;
+  const cfg = state.report.config || {};
+  const review = version.review;
   const prev = previous();
-  const best = r.is_best ? ' <span class="star" title="best draft">★ best</span>' : "";
-  const blocked = r.blocked ? ' <span class="badge blocked">blocked</span>' : "";
-  const gap = r.gap_is_split
-    ? "reviewer split between " + Object.entries(r.gap_distribution).sort((a, b) => b[1] - a[1])
-        .slice(0, 2).map(([n, p]) => `${esc(n)} ${p.toFixed(2)}`).join(" and ")
-    : esc(r.biggest_gap);
-  const weakest = r.weakest_line
-    ? `<div class="dim"><div class="head"><span class="label">weakest line</span>
-       <span class="num">${r.weakest_line.support.toFixed(2)}</span></div>
-       <div class="note mono" style="margin-top:2px">${esc(r.weakest_line.text)}</div></div>`
+  const overall = scoreOf(version);
+  const before = scoreOf(prev);
+  const change = delta(overall, before);
+  const gap = review.gap_is_split
+    ? "the reviewer is split — " + Object.entries(review.gap_distribution)
+        .sort((a, b) => b[1] - a[1]).slice(0, 2)
+        .map(([name, probability]) => `${esc(words(name))} ${probability.toFixed(2)}`)
+        .join(" against ")
+    : esc(words(review.biggest_gap));
+  const trust = review.trust || {};
+  const block = cfg.fabrication_block ?? 0.5;
+  const gated = review.fabrication_risk >= block;
+  const weakest = review.weakest_line
+    ? `<span class="weakest">weakest line · ${review.weakest_line.support.toFixed(2)} · ${
+        esc(review.weakest_line.text)}</span>`
     : "";
-  // Built as its own variable: an escaped quote inside a template literal is a syntax
-  // error that takes the whole page down, and the browser is the only thing that catches it.
-  const note = v.reviewed ? "" : "unchanged, scores carried";
-  const carriedNote = note ? ` <span class='muted'>${note}</span>` : "";
-  const reweighted = _isReweighted();
-  const rwOverall = reweighted ? _recomputeOverall(v, _activeWeights()) : null;
-  const displayOverall = rwOverall !== null ? rwOverall : r.overall;
-  const rwNote = reweighted ? `<div class="note" style="color:var(--warn);margin:2px 0">re-weighted view — scores unchanged</div>` : '';
-  $('scores').innerHTML = `
-    <h2>${esc(v.label)}${best}${blocked}${carriedNote}</h2>
-    <div class="big">${displayOverall.toFixed(2)}</div>${rwNote}
-    <div class="muted">quality ${r.quality.toFixed(2)} × grounded ${r.groundedness.toFixed(2)}
-      ${delta(r.overall, prev && prev.review ? prev.review.overall : null)}</div>
-    <h2 style="margin-top:16px">Dimensions</h2>
-    ${scoreRows(v, prev)}
-    <h2 style="margin-top:16px">Fabrication checks</h2>
-    ${guardrailRows(v)}
-    <div class="dim"><div class="head"><span class="label">line grounding</span>
-      <span class="num">${r.line_grounding.toFixed(2)}</span>
-      <span class="meta" title="${r.reused_lines} lines were carried over from the previous draft instead of re-asked">${r.audited_lines} lines · ${r.reused_lines} carried</span></div>
-      ${bar(r.line_grounding, "good")}</div>
-    ${weakest}
-    <h2 style="margin-top:16px">Biggest gap</h2>
-    <p class="muted" style="margin:0">${gap}</p>
-    <div class="note" style="margin-top:16px;border-top:1px solid var(--border);padding-top:10px">
-      ${v.chars.toLocaleString()} chars · ${v.words} words · ${v.lines} lines ·
-      ${v.saved ? "saved to " + esc(state.report.paths ? state.report.paths.out : "the output file") : "not saved"}
+  const best = review.is_best ? `<span class="tag">best</span>` : "";
+  const blocked = review.blocked ? `<span class="tag bad">blocked</span>` : "";
+  const carried = version.reviewed ? "" : "unchanged, scores carried over";
+  el.innerHTML = `<div class="frame">
+    <div class="hero-head">
+      <span class="label hero-eyebrow">verdict ......</span>
+      <span class="label plain">${esc(version.label)}${best}${blocked} · ${carried
+        || `${trust.audited || 0} lines audited`}</span>
+    </div>
+    <div class="hero-body">
+      <div class="hero-number">${overall.toFixed(2)}</div>
+      <div class="hero-side">
+        <p class="hero-line">quality <b>${review.quality.toFixed(2)}</b> ×
+          grounded <b class="${gated ? "risk" : "safe"}">${review.groundedness.toFixed(2)}</b>
+          ${_isReweighted() ? "<b>· re-weighted view</b>" : ""}</p>
+        <p class="hero-line muted">grounded = 1 − fabrication risk
+          <b class="${gated ? "risk" : "safe"}">${review.fabrication_risk.toFixed(2)}</b>${
+          gated ? " — over the block line" : ""}</p>
+        <p class="hero-line">${before === null
+          ? "<b>the first draft</b> — nothing to compare it against yet"
+          : `${change} against the previous round`}</p>
+        <p class="hero-line">biggest gap — <b>${gap}</b></p>
+      </div>
+    </div>
+    <div class="hero-trust">
+      <span><b>${trust.audited || 0}</b> lines audited</span>
+      <span class="carried"><b>${trust.carried || 0}</b> carried, not re-asked</span>
+      <span class="unsupported"><b>${trust.unsupported || 0}</b> unsupported</span>
+      <span class="uncertain"><b>${trust.uncertain || 0}</b> uncertain</span>
+      <span class="uncertain"><b>${trust.low_confidence || 0}</b> low-confidence dimensions</span>
+      ${weakest}
+    </div>
+  </div>`;
+}
+
+function renderChecks() {
+  const el = $("checks");
+  const version = current();
+  if (!version || !version.review) { el.innerHTML = ""; return; }
+  const cfg = state.report.config || {};
+  el.innerHTML = `<div class="win magenta">
+      <div class="win-bar"><span class="t">dimensions</span>
+        <span class="r">weighted mean, each scored against a level of ${cfg.top_level}</span></div>
+      <div class="rows">${dimensionRows(version, previous())}</div>
+    </div>
+    <div class="win pink">
+      <div class="win-bar"><span class="t">fabrication checks</span>
+        <span class="r">probability the draft added something the original does not support —
+          a draft is blocked at ${(cfg.fabrication_block ?? 0.5).toFixed(2)}</span></div>
+      <div class="rows">${checkRows(version)}</div>
     </div>`;
 }
 
-// The lines the reviewer could not ground, with the decision they need. They sit under the
-// diff because they are about the text: the writer's wording, then the verdict on it.
+// The lines the reviewer could not ground, with the decision they need. They come straight
+// after the verdict because they are the only thing on the page that needs a person, and
+// this is the one band that gets the accent colour.
 // The buttons carry the flagged line's position, never its text: a line containing a quote
 // cannot break out of an HTML attribute, and the click handler reads the text back from the
 // payload, so nothing user-supplied is interpolated into markup.
 function renderFlagged() {
   const el = $("flagged");
-  const v = current();
-  const r = v && v.review;
-  const lines = (r && r.flagged_lines) || [];
+  const version = current();
+  const review = version && version.review;
+  const lines = (review && review.flagged_lines) || [];
   if (!lines.length) {
     el.innerHTML = "";
     return;
   }
-  el.innerHTML = `<h2>Unsupported lines (${lines.length})</h2>
-    <p class="note" style="margin:0 0 4px">A line here is one the reviewer does not believe the
-      original resume supports. Each needs an approve/reject decision before it ships, and a
-      rejection goes back to the writer.</p>
-    <ul class="flagged">${lines.map((text, i) => {
-      const entry = (r.lines_to_review || []).find((line) => line.text === text);
+  el.innerHTML = `<div class="win pink">
+    <div class="win-bar"><span class="t">needs a decision</span>
+      <span class="r">${lines.length} line${lines.length === 1 ? "" : "s"} the reviewer could
+        not ground — approve or reject before this ships</span></div>
+    <div class="decide"><ul>${lines.map((text, i) => {
+      const entry = (review.lines_to_review || []).find((line) => line.text === text);
       const decision = entry && entry.decision;
       const claim = entry && entry.failing_claim
-        ? `<div class="note">failing claim: “${esc(entry.failing_claim)}”</div>`
+        ? `<div class="why">failing claim — “${esc(entry.failing_claim)}”</div>`
         : "";
-      const badge = decision
-        ? ` <span class="badge" style="color:${decision === "approved" ? "var(--good)" : "var(--bad)"}">${esc(decision)}</span>`
+      const tag = decision
+        ? `<span class="verdict-tag${decision === "rejected" ? " rejected" : ""}">${esc(decision)}</span>`
         : "";
       const acts = decision ? ""
         : `<div class="acts">
-             <button class="review" data-version="${v.index}" data-line-index="${i}" data-verdict="approved">✓ Approve</button>
-             <button class="review" data-version="${v.index}" data-line-index="${i}" data-verdict="rejected" style="border-color:var(--bad)">✗ Reject</button>
+             <button class="review keep" data-version="${version.index}" data-line-index="${i}" data-verdict="approved">Approve</button>
+             <button class="review drop" data-version="${version.index}" data-line-index="${i}" data-verdict="rejected">Reject</button>
            </div>`;
-      return `<li><div class="mono">${esc(text)}${badge}</div>${claim}${acts}</li>`;
-    }).join("")}</ul>`;
+      return `<li><div class="quote"><span>unverified line ${i + 1} of ${lines.length}</span>
+        <span>grounding ${entry ? entry.support.toFixed(2) : "—"}${tag}</span></div>
+        <div class="line-text">${esc(text)}</div>${claim}${acts}</li>`;
+    }).join("")}</ul></div></div>`;
 }
 
-function diffRows(v) {
-  const evidence = (v.review && v.review.evidence) ? v.review.evidence : {};
+function diffRows(version) {
+  const evidence = (version.review && version.review.evidence) ? version.review.evidence : {};
   const key = state.vsOriginal ? "diff_vs_original" : "diff_vs_previous";
-  const d = v[key];
-  if (!d || !d.rows.length) return `<div class="line skip">nothing to compare yet</div>`;
-  return d.rows.filter((row) => !state.hideUnchanged || row.kind !== "equal")
+  const diff = version[key];
+  if (!diff || !diff.rows.length) return `<div class="line skip">nothing to compare yet</div>`;
+  return diff.rows.filter((row) => !state.hideUnchanged || row.kind !== "equal")
     .map((row) => {
-      if (row.kind === "skip") return `<div class="line skip">⋯ ${row.count} unchanged lines</div>`;
-      const g1 = row.old ?? "", g2 = row.new ?? "";
+      if (row.kind === "skip") {
+        return `<div class="line skip">⋯ ${row.count} unchanged line${
+          row.count === 1 ? "" : "s"}</div>`;
+      }
+      const oldNo = row.old ?? "", newNo = row.new ?? "";
+      const mark = row.kind === "add" ? "+" : row.kind === "remove" ? "−" : "·";
       const lineKey = auditKey(row.text);
-      const hasEvidence = Object.prototype.hasOwnProperty.call(evidence, lineKey);
-      const src = evidence[lineKey];
-      const srcBtn = hasEvidence
-        ? `<button class="src-btn" title="show source line">▸</button>`
-        : `<span></span>`;
-      const srcRow = hasEvidence
-        ? `<div class="src-row">${
-            src !== null && src !== undefined
-              ? `<span class="muted">source: </span><span class="mono">${esc(src)}</span>`
-              : `<span style="color:var(--bad)">⊘ no line in the original resume supports this claim</span>`
-          }</div>`
-        : '';
-      return `<div class="line ${row.kind}"><span class="g">${g1}</span><span class="g">${g2}</span>` +
-             `<span class="t">${esc(row.text) || "&nbsp;"}</span>${srcBtn}</div>${srcRow}`;
+      const sourced = Object.prototype.hasOwnProperty.call(evidence, lineKey);
+      const source = evidence[lineKey];
+      // The absence of evidence is the evidence: a line nothing in the original supports
+      // says so in the row itself, in the colour reserved for it.
+      const missing = sourced && (source === null || source === undefined);
+      const action = sourced
+        ? `<button class="src-btn${missing ? " nosrc" : ""}" data-missing="${
+            missing ? "1" : ""}" title="${
+            missing ? "this line has no source in the original resume" : "show the original line"
+            }">${missing ? "no source" : "source"} ▸</button>`
+        : "";
+      const sourceRow = sourced
+        ? `<div class="src-row">${missing
+            ? '<span class="no">⊘ no line in the original resume supports this claim</span>'
+            : `<span class="muted">from the original — </span>${esc(source)}`}</div>`
+        : "";
+      return `<div class="line ${row.kind}"><span class="g">${oldNo}</span>` +
+             `<span class="g r">${newNo}</span><span class="mark">${mark}</span>` +
+             `<span class="t">${esc(row.text) || "&nbsp;"}</span>` +
+             `<span class="act">${action}</span></div>${sourceRow}`;
     }).join("");
 }
 
 function renderDiff() {
-  const v = current();
-  if (!v || !v.review) {
-    $("diffhead").innerHTML = "<strong>Original resume</strong> <span class='muted'>the input</span>";
-    $("diff").innerHTML = v
-      ? v.text.split("\\n").map((t) => `<div class="line"><span class="g"></span><span class="g"></span><span class="t">${esc(t)}</span></div>`).join("")
+  const version = current();
+  if (!version || !version.review) {
+    $("diffhead").innerHTML = `<span class="t">original resume</span>
+      <span class="r">the input — nothing has been scored yet</span>`;
+    $("diff").innerHTML = version
+      ? version.text.split("\\n").map((text) => `<div class="line eq"><span class="g"></span>` +
+          `<span class="g r"></span><span class="mark"></span>` +
+          `<span class="t">${esc(text)}</span><span class="act"></span></div>`).join("")
       : "";
     return;
   }
-  if (state.editing) { renderEditable(v); return; }
-  const key = state.vsOriginal ? "diff_vs_original" : "diff_vs_previous";
-  const d = v[key];
-  const from = state.vsOriginal ? "the original resume" : (previous() || {}).label || "the original resume";
-  const unchanged = d.added === 0 && d.removed === 0;
-  $("diffhead").innerHTML = `<strong>${esc(v.label)}</strong>
-    <span class="muted">vs ${esc(from)}</span>
-    ${unchanged
-      ? '<span class="muted">no changes — this round kept the wording it was given</span>'
-      : `<span class="up">+${d.added}</span><span class="down">−${d.removed}</span>`}
-    <span class="muted">${d.unchanged} unchanged</span>
-    ${v.review.improvement === null ? "" : `<span class="muted">· overall ${v.review.improvement > 0 ? "+" : ""}${v.review.improvement.toFixed(2)} vs best</span>`}`;
+  if (state.editing) { renderEditable(version); return; }
+  const diff = version[state.vsOriginal ? "diff_vs_original" : "diff_vs_previous"];
+  const from = state.vsOriginal ? "the original" : (previous() || {}).label || "the original";
+  const unchanged = diff.added === 0 && diff.removed === 0;
+  $("diffhead").innerHTML = `<span class="t">draft — ${esc(version.label)}</span>
+    <span class="r">${unchanged
+      ? `identical to ${esc(from)}`
+      : `against ${esc(from)} · <span class="up">+${diff.added}</span> <span class="down">−${diff.removed}</span>`}${
+      unchanged ? "" : ` · ${diff.unchanged} unchanged`}${
+      version.review.improvement === null ? ""
+        : ` · overall ${version.review.improvement > 0 ? "+" : ""}${version.review.improvement.toFixed(2)} against the best`}</span>`;
   $("diff").innerHTML = unchanged
     ? `<div class="line skip">identical to ${esc(from)}</div>`
-    : diffRows(v);
+    : diffRows(version);
 }
 
-// ── Grounding ledger, coverage, and cost ──────────────────────────────────────
+// ── The grounding ledger, the coverage matrix, and the cost of the run ───────
 // Everything below is arithmetic over judgments the run already paid for. The one
 // exception is the debounced re-check of an edit, which asks about changed lines only.
 
@@ -438,12 +762,12 @@ function ledgerItem(entry) {
   // Show the per-claim distribution only where it says something the line score does not.
   const claimRows = claims.length > 1
     ? claims.map((claim) => {
-        const b = _band(claim.support);
+        const claimBand = _band(claim.support);
         // The claim that dragged the line down is the reason the line is flagged, so it is
         // marked rather than left for the reader to find by comparing numbers.
         const fails = entry.failing_claim && claim.text === entry.failing_claim
           ? ` <span class="fails">fails</span>` : "";
-        return `<div class="claim"><span class="p ${b}">${claim.support.toFixed(2)}</span>` +
+        return `<div class="claim"><span class="p ${claimBand}">${claim.support.toFixed(2)}</span>` +
                `<span class="t" title="${esc(claim.text)}">${esc(claim.text)}</span>${fails}</div>`;
       }).join("")
     : "";
@@ -457,32 +781,36 @@ function ledgerItem(entry) {
 
 function renderLedger() {
   const el = $("ledger");
-  const v = current();
-  const entries = (v && v.review && v.review.ledger) || [];
+  const version = current();
+  const entries = (version && version.review && version.review.ledger) || [];
   if (!entries.length) { el.innerHTML = ""; return; }
   const cfg = state.report.config || {};
   const floor = cfg.line_support_floor ?? 0.5;
   const review = cfg.line_review_floor ?? 0.8;
-  const trust = v.review.trust || {};
+  const trust = version.review.trust || {};
   const withBand = entries.map((entry) => Object.assign({}, entry, { band: _band(entry.support) }));
   const attention = withBand.filter((entry) => entry.band !== "ok");
-  const shown = _ledgerFilter === "all" ? withBand
-    : _ledgerFilter === "attention" ? attention
-    : withBand.filter((entry) => entry.band === _ledgerFilter);
+  // A run that grounded everything has nothing to put in the default band, and an empty
+  // "needs attention" reads as a broken panel rather than as good news: fall back to all.
+  const filter = (_ledgerFilter === "attention" && !attention.length) ? "all" : _ledgerFilter;
+  const shown = filter === "all" ? withBand
+    : filter === "attention" ? attention
+    : withBand.filter((entry) => entry.band === filter);
   const filters = [
     ["attention", `needs attention (${attention.length})`],
     ["all", `all (${withBand.length})`],
     ["unc", `uncertain (${trust.uncertain || 0})`],
     ["bad", `unsupported (${trust.unsupported || 0})`],
   ];
-  el.innerHTML = `<h2>Grounding ledger</h2>
-    <div class="note">${trust.audited || 0} lines audited · ${trust.carried || 0} carried from the
-      previous draft instead of re-asked · uncertain band ${floor}–${review}</div>
-    <div class="filters">${filters.map(([key, label]) =>
-      `<button data-filter="${key}" class="${_ledgerFilter === key ? "on" : ""}">${esc(label)}</button>`
+  const body = `<div class="filters">${filters.map(([key, label]) =>
+      `<button data-filter="${key}" class="${filter === key ? "on" : ""}">${esc(label)}</button>`
     ).join("")}</div>
     ${shown.length ? `<ul class="ledger">${shown.map(ledgerItem).join("")}</ul>`
-                   : `<p class="note">nothing in this band</p>`}`;
+                   : `<p class="lead">nothing in this band</p>`}`;
+  el.innerHTML = foldWindow("ledger", "grounding ledger",
+    `${trust.audited || 0} audited · ${trust.carried || 0} carried · uncertain band ${floor}–${review}`,
+    body, "sage");
+  bindWindows(el);
   el.querySelectorAll(".filters button").forEach((button) => {
     button.addEventListener("click", () => { _ledgerFilter = button.dataset.filter; renderLedger(); });
   });
@@ -490,65 +818,70 @@ function renderLedger() {
 
 function renderCoverage() {
   const el = $("coverage");
-  const v = current();
-  const cov = (v && v.review && v.review.coverage) || [];
-  if (!cov.length) { el.innerHTML = ""; return; }
-  const open = cov.filter((entry) => !entry.draft_line);
-  el.innerHTML = `<h2 style="margin-top:14px">Requirements answered (${cov.length - open.length} of ${cov.length})</h2>
-    <div class="cov">${cov.map((entry) =>
-      `<span class="mark ${entry.draft_line ? "ok" : "no"}">${entry.draft_line ? "✓" : "○"}</span>
-       <span>${esc(entry.requirement)}</span>
-       <span class="ans">${entry.draft_line
-         ? "answered by: " + esc(entry.draft_line)
-         : "no line in this draft answers it — leave it out rather than invent it"}</span>`
-    ).join("")}</div>`;
+  const version = current();
+  const coverage = (version && version.review && version.review.coverage) || [];
+  if (!coverage.length) { el.innerHTML = ""; return; }
+  const answered = coverage.filter((entry) => entry.draft_line).length;
+  const job = state.report.job_description || "";
+  const rows = coverage.map((entry) => `<div class="cov-row${entry.draft_line ? "" : " open-req"}">
+      <span class="mark ${entry.draft_line ? "ok" : "no"}">${entry.draft_line ? "✓" : "○"}</span>
+      <span class="req">${esc(entry.requirement)}</span>
+      <span class="ans">${entry.draft_line
+        ? "answered by · " + esc(entry.draft_line)
+        : "no line in this draft answers it — leave it out rather than invent it"}</span>
+    </div>`).join("");
+  const body = `<div class="cov">${rows}</div>
+    <details class="sub"><summary>
+      <span>show the target job description</span>
+      <span>${job ? job.split("\\n").length + " lines" : "not captured"}</span></summary>
+      <pre class="jd" id="jd">${esc(job)}</pre></details>`;
+  el.innerHTML = foldWindow("coverage", "requirement coverage",
+    `${answered} of ${coverage.length} job requirements answered`, body, "sage");
+  bindWindows(el);
 }
 
 function renderTotals() {
-  const r = state.report;
-  const cfg = r.config || {};
-  const t = r.totals || {};
-  const reviewer = t.reviewer_tokens || 0;
-  const total = t.total_tokens || 0;
+  const el = $("totals");
+  const report = state.report;
+  const cfg = report.config || {};
+  const totals = report.totals || {};
+  const total = totals.total_tokens || 0;
+  const reviewer = totals.reviewer_tokens || 0;
   const share = total ? Math.round((reviewer / total) * 100) : 0;
-  const budget = cfg.max_tokens ? [total, cfg.max_tokens, "token"]
-    : cfg.max_seconds ? [t.seconds || 0, cfg.max_seconds, "time"] : null;
-  let meter;
-  if (budget) {
-    const pct = Math.min(100, (budget[0] / budget[1]) * 100);
-    meter = `<div class="note">${budget[2]} budget: ${budget[0].toLocaleString()} of
-      ${budget[1].toLocaleString()} used (${Math.round(pct)}%)</div>
-      <div class="meter ${pct >= 90 ? "hot" : ""}"><i style="width:${pct}%"></i></div>`;
+  let budget = "";
+  if (cfg.max_tokens) {
+    const used = total / cfg.max_tokens;
+    budget = `<div class="cost-row"><span>token budget</span>
+      <span class="num">${total.toLocaleString()} of ${cfg.max_tokens.toLocaleString()} ·
+        ${Math.round(used * 100)}%</span>${meter(used, used >= 0.9 ? "bad" : "")}</div>`;
+  } else if (cfg.max_seconds) {
+    const used = (totals.seconds || 0) / cfg.max_seconds;
+    budget = `<div class="cost-row"><span>time budget</span>
+      <span class="num">${totals.seconds || 0}s of ${cfg.max_seconds}s ·
+        ${Math.round(used * 100)}%</span>${meter(used, used >= 0.9 ? "bad" : "")}</div>`;
   } else {
-    meter = `<div class="note">no budget cap set — the loop stops on the score alone</div>`;
+    budget = `<div class="cost-row"><span>no budget cap</span>
+      <span class="num">the loop stops on the score alone</span></div>`;
   }
-  const perRound = versions().filter((v) => v.review).map((v) => {
-    const w = (v.review.writer && v.review.writer.total_tokens) || 0;
-    const rv = (v.review.reviewer && v.review.reviewer.total_tokens) || 0;
-    const sum = w + rv || 1;
-    return `<div class="dim"><div class="head"><span class="label">${esc(v.label)}</span>
-      <span class="meta" title="writer tokens">${w.toLocaleString()}w</span>
-      <span class="meta" title="reviewer tokens">${rv.toLocaleString()}r</span></div>
-      <span class="bar" title="reviewer share of this round's tokens"><i style="width:${(rv / sum) * 100}%"></i></span></div>`;
+  const perRound = versions().filter((version) => version.review).map((version) => {
+    const writer = (version.review.writer && version.review.writer.total_tokens) || 0;
+    const reviewed = (version.review.reviewer && version.review.reviewer.total_tokens) || 0;
+    const sum = writer + reviewed || 1;
+    return `<div class="cost-row"><span>${esc(version.label)}</span>
+      <span class="num">${writer.toLocaleString()} writer · ${reviewed.toLocaleString()} reviewer</span>
+      ${meter(reviewed / sum, "")}</div>`;
   }).join("");
-  const best = versions().filter((v) => v.review && v.review.is_best).pop()
-    || versions().filter((v) => v.review).pop();
-  const trust = best && best.review.trust;
-  const trustStrip = trust ? `<h2 style="margin-top:14px">How much to trust ${esc(best.label)}</h2>
-    <div class="kv">
-      <span class="muted">audited</span><span>${trust.audited} lines · ${trust.carried} carried, not re-asked</span>
-      <span class="muted">uncertain</span><span>${trust.uncertain} lines in the band · ${trust.low_confidence} dimension${trust.low_confidence === 1 ? "" : "s"} answered without confidence</span>
-      <span class="muted">needs a person</span><span>${trust.unsupported} unsupported line${trust.unsupported === 1 ? "" : "s"}</span>
-    </div>` : "";
-  $("totals").innerHTML = `<div class="kv">
-      <span class="muted">writer</span><span>${t.writer_calls || 0} calls · ${(t.writer_tokens || 0).toLocaleString()} tokens</span>
-      <span class="muted">reviewer</span><span>${t.reviewer_calls || 0} calls · ${reviewer.toLocaleString()} tokens · ${share}% of the run</span>
-      <span class="muted">total</span><span>${total.toLocaleString()} tokens · ${t.seconds || 0}s</span>
-    </div>${meter}
-    <h2 style="margin-top:14px">Cost per round
-      <span class="muted" style="letter-spacing:0;text-transform:none">(bar = reviewer share)</span></h2>
-    ${perRound || '<p class="note">no rounds yet</p>'}
-    ${trustStrip}`;
+  const body = `<div class="kv">
+      <span class="k">writer</span><span>${totals.writer_calls || 0} calls · ${(totals.writer_tokens || 0).toLocaleString()} tokens</span>
+      <span class="k">reviewer</span><span>${totals.reviewer_calls || 0} calls · ${reviewer.toLocaleString()} tokens · ${share}% of the run</span>
+      <span class="k">total</span><span>${total.toLocaleString()} tokens · ${totals.seconds || 0}s</span>
+    </div>
+    <div class="band-head"><span>cost per round</span>
+      <span class="r">the meter is the reviewer's share</span></div>
+    <div class="cost-rows">${budget}${perRound}</div>`;
+  el.innerHTML = foldWindow("totals", "run cost",
+    `${total.toLocaleString()} tokens · ${totals.seconds || 0}s`, body, "grey");
+  bindWindows(el);
 }
 
 // ── Editing a draft, with JEV in the gutter ───────────────────────────────────
@@ -560,18 +893,18 @@ function editText() {
     .map((el) => el.textContent).join("\\n");
 }
 function _carriedMap(text) {
-  const v = current();
-  if (!v || !v.review) return {};
+  const version = current();
+  if (!version || !version.review) return {};
   const now = new Set(text.split("\\n").map((line) => auditKey(line)));
   const carried = {};
-  (v.review.ledger || []).forEach((entry) => {
+  (version.review.ledger || []).forEach((entry) => {
     if (now.has(entry.text)) carried[entry.text] = entry.support;
   });
   return carried;
 }
 function toggleEdit() {
-  const v = current();
-  if (!v || !v.review) { setSaved("pick a reviewed round to edit"); return; }
+  const version = current();
+  if (!version || !version.review) { setSaved("pick a reviewed round to edit"); return; }
   state.editing = !state.editing;
   state.editResults = null;
   state.editCheckedText = null;
@@ -579,12 +912,11 @@ function toggleEdit() {
   setSaved(state.editing ? "edit the draft — only the lines you change are re-checked" : "");
   render();
 }
-function renderEditable(v) {
-  $("diffhead").innerHTML = `<strong>Editing ${esc(v.label)}</strong>
-    <span class="muted">only the lines you change are re-checked</span>
-    <span id="lints" class="note"></span>`;
-  $("diff").innerHTML = v.text.split("\\n").map((text) =>
-    `<div class="editrow"><span class="dot muted">·</span>` +
+function renderEditable(version) {
+  $("diffhead").innerHTML = `<span class="t">editing — ${esc(version.label)}</span>
+    <span class="r">only the lines you change are re-checked<span id="lints"></span></span>`;
+  $("diff").innerHTML = version.text.split("\\n").map((text) =>
+    `<div class="editrow"><span class="dot">·</span>` +
     `<div class="editable" contenteditable="plaintext-only" spellcheck="false">${esc(text)}</div></div>`
   ).join("");
   if (state.editResults) applyEditResults();
@@ -605,9 +937,9 @@ function applyEditResults() {
   const unsupported = state.editUnsupported || [];
   const lints = $("lints");
   if (lints) {
-    lints.textContent = unsupported.length
+    lints.textContent = " · " + (unsupported.length
       ? `${unsupported.length} line(s) cannot be grounded`
-      : "every line is grounded";
+      : "every line is grounded");
     lints.style.color = unsupported.length ? "var(--bad)" : "var(--good)";
   }
 }
@@ -636,7 +968,7 @@ async function checkEdit() {
   }
 }
 function updateEditControls() {
-  $("edit").textContent = state.editing ? "✎ Done" : "✎ Edit";
+  $("edit").textContent = state.editing ? "done" : "edit";
   const saveEdit = $("saveedit");
   saveEdit.style.display = state.editing ? "" : "none";
   const clean = state.editing && state.editCheckedText !== null
@@ -666,20 +998,18 @@ async function saveEdited() {
 
 function renderTimeline() {
   const reweighted = _isReweighted();
-  const rwBestIdx = reweighted ? _reweightedBestIndex() : null;
-  $('timeline').innerHTML = versions().map((v, i) => {
-    const rwScore = reweighted ? _recomputeOverall(v, _activeWeights()) : null;
-    const score = rwScore !== null ? rwScore.toFixed(2) : (v.review ? v.review.overall.toFixed(2) : '—');
-    const isLoopBest = v.review && v.review.is_best;
-    const isRwBest = reweighted && v.index === rwBestIdx && v.review;
-    const star = isRwBest
-      ? '<span class="star" title="re-weighted best">★</span>'
-      : (isLoopBest && !reweighted
-          ? '<span class="star">★</span>'
-          : (isLoopBest ? '<span class="muted" title="loop best">◆</span>' : ''));
-    const dot = v.saved ? '<span class="muted" title="saved to the output file">●</span>' : "";
+  const rwBest = reweighted ? _reweightedBestIndex() : null;
+  $("timeline").innerHTML = versions().map((version, i) => {
+    const score = scoreOf(version);
+    const isLoopBest = version.review && version.review.is_best;
+    const isRwBest = reweighted && version.index === rwBest && version.review;
+    let star = "";
+    if (isRwBest || (isLoopBest && !reweighted)) star = '<span class="star">★</span>';
+    else if (isLoopBest) star = '<span class="star muted" title="the loop best">◆</span>';
+    const dot = version.saved
+      ? '<span class="saved" title="written to the output file">●</span>' : "";
     return `<span class="chip ${i === state.index ? "sel" : ""}" data-i="${i}">
-      ${esc(v.label)} <span class="n">${score}</span>${star}${dot}</span>`;
+      ${esc(version.label)} <span class="n">${score === null ? "—" : score.toFixed(2)}</span>${star}${dot}</span>`;
   }).join("");
   $("timeline").querySelectorAll(".chip").forEach((chip) => {
     chip.addEventListener("click", () => select(Number(chip.dataset.i)));
@@ -687,32 +1017,30 @@ function renderTimeline() {
 }
 
 function render() {
-  const r = state.report;
-  const cfg = r.config || {};
+  const report = state.report;
+  const cfg = report.config || {};
   // The page is opened as soon as the server is listening, which can be before the first
   // payload exists. That state is "starting", not "done" — and it has to keep polling, or
   // the browser would sit on an empty page for the whole run.
-  const waiting = !r.status && !versions().length;
-  const live = r.status === "running" || waiting;
-  $("status").textContent = waiting ? "starting…" : live ? "running" : "done";
+  const waiting = !report.status && !versions().length;
+  const live = report.status === "running" || waiting;
+  $("status").textContent = waiting ? "starting" : live ? "running" : "done";
   $("status").className = "badge" + (live && !waiting ? " live" : "");
-  $("paths").textContent = (r.paths ? `${r.paths.resume} → ${r.paths.out}` : "");
-  $("stop").textContent = waiting
-    ? "waiting for the first round…"
-    : live
-      ? `round ${versions().length} running…`
-      : (r.stop_reason || "");
-  $("jd").textContent = r.job_description || "";
-  $("footer").innerHTML = `<div>writer ${esc(cfg.writer_model || "")} · reviewer
-    ${esc(cfg.reviewer_model || "")} · stop when a round beats the best by less than
-    ${cfg.min_improvement} for ${cfg.patience} rounds, or reaches ${cfg.target_score}</div>
-    <div style="margin-top:8px">
-      <kbd>←</kbd> <kbd>→</kbd> versions ·
-      <kbd>h</kbd> hide unchanged ·
-      <kbd>c</kbd> compare with the original ·
-      <kbd>w</kbd> weights ·
-      <kbd>e</kbd> edit and re-check
-    </div>`;
+  $("paths").textContent = report.paths ? `${report.paths.resume} → ${report.paths.out}` : "";
+  $("stop").innerHTML = `<span class="state">${waiting ? "starting" : live
+      ? "running" : "stopped"}</span><span class="detail">${waiting
+      ? "waiting for the first round…"
+      : live ? `round ${versions().length} running…` : esc(report.stop_reason || "")}</span>`;
+  $("footer").innerHTML = `<span>writer ${esc(cfg.writer_model || "")} · reviewer
+      ${esc(cfg.reviewer_model || "")} · stops when a round beats the best by less than
+      ${cfg.min_improvement} for ${cfg.patience} rounds, or reaches ${cfg.target_score}</span>
+    <span class="keys"><kbd>←</kbd><kbd>→</kbd> versions <kbd>h</kbd> unchanged
+      <kbd>c</kbd> against the original <kbd>w</kbd> weights <kbd>e</kbd> edit</span>
+    <span class="key">
+      <span class="k-sage"><i></i> grounded, answered, carried</span>
+      <span class="k-magenta"><i></i> scored, uncertain</span>
+      <span class="k-pink"><i></i> unsupported, blocked, needs a person</span>
+    </span>`;
   const newest = versions()[versions().length - 1];
   if (newest && newest.review && newest.index !== state.announced) {
     state.announced = newest.index;
@@ -735,9 +1063,10 @@ function render() {
   renderTimeline();
   renderScores();
   renderFlagged();
+  renderDiff();
+  renderChecks();
   renderLedger();
   renderCoverage();
-  renderDiff();
   renderTotals();
   updateEditControls();
 }
@@ -756,17 +1085,17 @@ function step(delta) { select(state.index + delta); }
 function setSaved(message) { $("savestatus").textContent = message; }
 
 async function save() {
-  const v = current();
-  if (!v || !v.review) return;
+  const version = current();
+  if (!version || !version.review) return;
   setSaved("saving…");
   try {
     const res = await fetch("/api/save", {
       method: "POST",
       headers: { "content-type": "application/json", "X-Csrf-Token": CSRF_TOKEN },
-      body: JSON.stringify({ index: v.index }),
+      body: JSON.stringify({ index: version.index }),
     });
     const data = await res.json();
-    setSaved(res.ok ? `saved ${v.label} → ${data.saved}` : `error: ${data.error}`);
+    setSaved(res.ok ? `saved ${version.label} → ${data.saved}` : `error: ${data.error}`);
     if (res.ok) await refresh();
   } catch (error) {
     setSaved(`error: ${error}`);
@@ -847,15 +1176,15 @@ $("hide").addEventListener("change", (e) => { state.hideUnchanged = e.target.che
 $("vsorig").addEventListener("change", (e) => { state.vsOriginal = e.target.checked; renderDiff(); });
 
 // Evidence expand: delegated so it survives re-renders of #diff innerHTML.
-$('diff').addEventListener('click', (event) => {
-  const btn = event.target.closest('button.src-btn');
-  if (!btn) return;
-  const lineDiv = btn.closest('.line');
-  const srcRow = lineDiv && lineDiv.nextElementSibling;
-  if (srcRow && srcRow.classList.contains('src-row')) {
-    const open = srcRow.classList.toggle('open');
-    btn.textContent = open ? '▾' : '▸';
-  }
+$("diff").addEventListener("click", (event) => {
+  const button = event.target.closest("button.src-btn");
+  if (!button) return;
+  const line = button.closest(".line");
+  const source = line && line.nextElementSibling;
+  if (!source || !source.classList.contains("src-row")) return;
+  const open = source.classList.toggle("open");
+  const label = button.dataset.missing ? "no source" : "source";
+  button.textContent = `${label} ${open ? "▾" : "▸"}`;
 });
 
 // ── Weight sliders ────────────────────────────────────────────────────────────
@@ -874,72 +1203,73 @@ function _isReweighted() {
     (k) => Math.abs((_customWeights[k] || 0) - (def[k] || 0)) > 0.001
   );
 }
-function _recomputeOverall(v, weights) {
-  if (!v || !v.review) return null;
+function _recomputeOverall(version, weights) {
+  if (!version || !version.review) return null;
   const total = Object.values(weights).reduce((a, b) => a + b, 0) || 1;
-  let q = 0;
-  for (const [name, w] of Object.entries(weights)) {
-    const s = v.review.scores && v.review.scores[name];
-    if (s) q += (w / total) * s.normalized;
+  let quality = 0;
+  for (const [name, weight] of Object.entries(weights)) {
+    const score = version.review.scores && version.review.scores[name];
+    if (score) quality += (weight / total) * score.normalized;
   }
-  return q * v.review.groundedness;
+  return quality * version.review.groundedness;
 }
 function _reweightedBestIndex() {
   const weights = _activeWeights();
   let best = -1, bestScore = -1;
-  for (const v of versions()) {
-    const sc = _recomputeOverall(v, weights);
-    if (sc !== null && sc > bestScore) { bestScore = sc; best = v.index; }
+  for (const version of versions()) {
+    const score = _recomputeOverall(version, weights);
+    if (score !== null && score > bestScore) { bestScore = score; best = version.index; }
   }
   return best;
 }
 function _updateWeightPanel() {
   const weights = _activeWeights();
   const total = Object.values(weights).reduce((a, b) => a + b, 0);
-  const sumEl = $('wsum');
-  if (sumEl) sumEl.textContent = `sum ${Math.round(total * 100)}%`;
-  const noteEl = $('wreweight-note');
-  if (noteEl) noteEl.textContent = _isReweighted() ? 're-weighted view — scores unchanged' : '';
+  const sum = $("wsum");
+  if (sum) sum.textContent = `sum ${Math.round(total * 100)}%`;
+  const note = $("wreweight-note");
+  if (note) note.textContent = _isReweighted() ? "re-weighted view — the scores are unchanged" : "";
 }
 function _initWeightSliders() {
   const weights = _defaultWeights();
   if (!Object.keys(weights).length) return;
-  $('wsliders').innerHTML = Object.entries(weights).map(([dim, w]) => {
-    const cur = (_customWeights && _customWeights[dim] !== undefined) ? _customWeights[dim] : w;
+  $("wsliders").innerHTML = Object.entries(weights).map(([dimension, weight]) => {
+    const current_ = (_customWeights && _customWeights[dimension] !== undefined)
+      ? _customWeights[dimension] : weight;
     return `<div class="wslider-row">
-      <span style="min-width:115px;overflow:hidden;text-overflow:ellipsis" title="${esc(dim)}">${esc(dim)}</span>
-      <input type="range" min="0" max="50" step="1" value="${Math.round(cur * 100)}" data-dim="${esc(dim)}">
-      <span data-wpct="${esc(dim)}" style="min-width:34px;text-align:right">${Math.round(cur * 100)}%</span>
+      <span style="min-width:126px;overflow:hidden;text-overflow:ellipsis" title="${esc(dimension)}">${esc(words(dimension))}</span>
+      <input type="range" min="0" max="50" step="1" value="${Math.round(current_ * 100)}" data-dim="${esc(dimension)}">
+      <span data-wpct="${esc(dimension)}" style="min-width:34px;text-align:right">${Math.round(current_ * 100)}%</span>
     </div>`;
-  }).join('');
+  }).join("");
   _updateWeightPanel();
 }
-$('rubric-btn').addEventListener('click', () => {
-  const panel = $('rubric-panel');
-  const open = panel.style.display === 'none';
-  panel.style.display = open ? 'block' : 'none';
-  $('rubric-btn').textContent = open ? 'Weights ▾' : 'Weights ▸';
+$("rubric-btn").addEventListener("click", () => {
+  const panel = $("rubric-panel");
+  const open = panel.style.display === "none";
+  panel.style.display = open ? "block" : "none";
+  $("rubric-btn").textContent = open ? "weights ▾" : "weights";
   if (open) _initWeightSliders();
 });
-$('wsliders').addEventListener('input', (e) => {
-  const slider = e.target.closest('input[type=range]');
+$("wsliders").addEventListener("input", (event) => {
+  const slider = event.target.closest("input[type=range]");
   if (!slider || !slider.dataset.dim) return;
-  const dim = slider.dataset.dim;
+  const dimension = slider.dataset.dim;
   if (!_customWeights) _customWeights = Object.assign({}, _defaultWeights());
-  _customWeights[dim] = Number(slider.value) / 100;
-  const pct = $('wsliders').querySelector(`[data-wpct="${CSS.escape(dim)}"]`);
+  _customWeights[dimension] = Number(slider.value) / 100;
+  const pct = $("wsliders").querySelector(`[data-wpct="${CSS.escape(dimension)}"]`);
   if (pct) pct.textContent = `${slider.value}%`;
   _updateWeightPanel();
   renderTimeline();
   renderScores();
 });
-$('wreset').addEventListener('click', () => {
+$("wreset").addEventListener("click", () => {
   _customWeights = null;
   _initWeightSliders();
   renderTimeline();
   renderScores();
 });
-$('wexport').addEventListener('click', () => {
+$("wexport").addEventListener("click", () => {
   const weights = _activeWeights();
   const total = Object.values(weights).reduce((a, b) => a + b, 0) || 1;
   const normalized = Object.fromEntries(
@@ -947,21 +1277,21 @@ $('wexport').addEventListener('click', () => {
   );
   if (navigator.clipboard) {
     navigator.clipboard.writeText(JSON.stringify(normalized, null, 2))
-      .then(() => setSaved('weights copied to clipboard'))
-      .catch(() => setSaved('copy failed — see console'));
+      .then(() => setSaved("weights copied to clipboard"))
+      .catch(() => setSaved("copy failed — see console"));
   }
 });
 
-document.addEventListener('keydown', (event) => {
+document.addEventListener("keydown", (event) => {
   const target = event.target;
   // Never steal a keystroke from an input or from the editable draft.
-  if (target.tagName === 'INPUT' || target.isContentEditable) return;
-  if (event.key === 'ArrowLeft') { event.preventDefault(); step(-1); }
-  if (event.key === 'ArrowRight') { event.preventDefault(); step(1); }
-  if (event.key === 'h') { $('hide').checked = !$('hide').checked; state.hideUnchanged = $('hide').checked; renderDiff(); }
-  if (event.key === 'c') { $('vsorig').checked = !$('vsorig').checked; state.vsOriginal = $('vsorig').checked; renderDiff(); }
-  if (event.key === 'w') { $('rubric-btn').click(); }
-  if (event.key === 'e') { toggleEdit(); }
+  if (target.tagName === "INPUT" || target.isContentEditable) return;
+  if (event.key === "ArrowLeft") { event.preventDefault(); step(-1); }
+  if (event.key === "ArrowRight") { event.preventDefault(); step(1); }
+  if (event.key === "h") { $("hide").checked = !$("hide").checked; state.hideUnchanged = $("hide").checked; renderDiff(); }
+  if (event.key === "c") { $("vsorig").checked = !$("vsorig").checked; state.vsOriginal = $("vsorig").checked; renderDiff(); }
+  if (event.key === "w") { $("rubric-btn").click(); }
+  if (event.key === "e") { toggleEdit(); }
 });
 
 state.report = JSON.parse($("payload").textContent || "{}");

@@ -2,7 +2,7 @@ Jordan Avery
 jordan.avery@example.com | (555) 014-2288 | linkedin.com/in/jordanavery | Austin, TX
 
 SUMMARY
-Backend engineer with six years building and maintaining Python services, including a shipment tracking API and Django REST endpoints for an inventory platform. Comfortable with Python and some Go. Interested in platform and infrastructure work.
+Backend engineer with six years of experience, primarily in Python, building and maintaining APIs and services. Comfortable with some Go. Interested in platform and infrastructure work.
 
 EXPERIENCE
 
@@ -10,7 +10,7 @@ Vantage Logistics — Software Engineer II
 Mar 2022 - Present
 - Maintained the internal shipment tracking API used by the operations team.
 - Wrote the Python client library that internal teams use to talk to the tracking API.
-- Moved the rate-calculation endpoints as part of the team's migration of the order service from a monolith to smaller services.
+- Moved the rate-calculation endpoints as part of the migration of the order service from a monolith to a set of smaller services.
 - Contributed to a team effort that reduced p95 latency on the tracking API.
 - Took part in on-call rotation and incident response for the platform.
 - Reviewed pull requests and mentored two interns during the summer.
