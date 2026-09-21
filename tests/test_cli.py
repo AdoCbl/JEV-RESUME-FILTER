@@ -336,8 +336,19 @@ def test_resume_without_saved_rounds_says_which_directory(tmp_path: Path, monkey
 # ── The page opens by itself ──────────────────────────────────────────────────
 
 
-def _serve_run(tmp_path: Path, monkeypatch, extra: list[str], opened: list[str]) -> None:
-    """Run the tool with the page served, without opening a real browser and without blocking."""
+def _serve_run(
+    tmp_path: Path,
+    monkeypatch,
+    extra: list[str],
+    opened: list[str],
+    *,
+    port: str | None = "0",
+) -> Path:
+    """Run the tool with the page served, without opening a real browser and without blocking.
+
+    ``port="0"`` binds a free port; ``port=None`` leaves the flag off, which is the path an
+    ordinary `uv run main.py` takes and the only one that steps past a busy port.
+    """
     from polisher.cli import main
     from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
 
@@ -345,15 +356,16 @@ def _serve_run(tmp_path: Path, monkeypatch, extra: list[str], opened: list[str])
     monkeypatch.setattr("polisher.server.wait", lambda: None)
     monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
     resume, jd, out = _inputs(tmp_path)
+    argv = [str(resume), str(jd), "--out", str(out), "--secrets", str(_write_secrets(tmp_path))]
+    if port is not None:
+        argv += ["--port", port]
     with (
         patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
         patch("typesafe_sdk.TypeSafeClient", return_value=FakeTypeSafeClient()),
         patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
     ):
-        main(
-            [str(resume), str(jd), "--out", str(out), "--port", "0",
-             "--secrets", str(_write_secrets(tmp_path)), *extra]
-        )
+        main([*argv, *extra])
+    return out
 
 
 def test_the_run_opens_the_report_page(tmp_path: Path, monkeypatch) -> None:
@@ -363,6 +375,53 @@ def test_the_run_opens_the_report_page(tmp_path: Path, monkeypatch) -> None:
 
     assert opened, "the run did not open its page"
     assert opened[0].startswith("http://127.0.0.1:")
+
+
+def _busy_port() -> int:
+    """A real listening socket: the only thing that makes a port genuinely unavailable."""
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(1)
+    _OPEN_SOCKETS.append(sock)  # held for the life of the process
+    return sock.getsockname()[1]
+
+
+_OPEN_SOCKETS: list = []
+
+
+def test_a_busy_default_port_steps_to_the_next_one(tmp_path: Path, monkeypatch) -> None:
+    """A previous run holds the port, because the server outlives the run.
+
+    Refusing to serve is the wrong answer to that: the page is where a run is read.
+    """
+    import urllib.request
+
+    opened: list[str] = []
+    busy = _busy_port()
+    monkeypatch.setattr("polisher.cli.DEFAULT_PORT", busy)
+    _serve_run(tmp_path, monkeypatch, [], opened, port=None)
+
+    assert opened, "no page came up because the default port was busy"
+    served = int(opened[0].rsplit(":", 1)[1])
+    assert busy < served <= busy + 10, "it should step forward, not wander"
+    with urllib.request.urlopen(f"{opened[0]}/healthz", timeout=5) as response:
+        assert response.status == 200
+
+
+def test_an_explicit_busy_port_is_reported_and_the_run_carries_on(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """An explicitly requested port is honoured, so its failure is the run's to report."""
+    opened: list[str] = []
+    busy = _busy_port()
+    out = _serve_run(tmp_path, monkeypatch, [], opened, port=str(busy))
+
+    printed = capsys.readouterr().out
+    assert f"unavailable on port {busy}" in printed
+    assert opened == [], "there is no page to open"
+    assert out.exists(), "the run still happened"
 
 
 def test_no_open_serves_without_a_browser(tmp_path: Path, monkeypatch) -> None:

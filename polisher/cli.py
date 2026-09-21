@@ -12,6 +12,7 @@ import sys
 import threading
 import webbrowser
 from dataclasses import replace
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from openai import OpenAIError
@@ -91,7 +92,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="serve the report page but do not open a browser at it",
     )
     parser.add_argument("--host", default=DEFAULT_HOST)
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help=f"report page port (default {DEFAULT_PORT}; steps to the next free one if busy)",
+    )
     parser.add_argument(
         "--resume",
         dest="run_dir",
@@ -122,15 +128,47 @@ def open_report(url: str) -> None:
         pass
 
 
+PORT_WALK = 10  # how many ports to try when the default one is taken
+
+
+def requested_port(args: argparse.Namespace) -> int:
+    return DEFAULT_PORT if args.port is None else args.port
+
+
+def start_report_server(
+    state: server.ReportState, host: str, port: int, *, walk: bool
+) -> tuple[ThreadingHTTPServer | None, OSError | None]:
+    """Bind the report server, stepping to the next free port when the default is taken.
+
+    The server outlives the run so the page stays usable for the decisions that are the
+    reason to have a page at all — which means a previous run is often still holding the
+    port. Refusing to serve is the wrong answer to that: the page is where a run is read.
+    An explicitly requested port is honoured, and its failure reported.
+    """
+    last: OSError | None = None
+    for candidate in range(port, port + (PORT_WALK if walk else 1)):
+        try:
+            return server.start(state, host=host, port=candidate), None
+        except OSError as error:
+            last = error
+    return None, last
+
+
 def serve_saved(args: argparse.Namespace) -> None:
     try:
         payload = json.loads(args.serve_report.read_text())
     except FileNotFoundError:
         raise SystemExit(f"{args.serve_report} not found")
+
     state = server.ReportState(output_path=args.out)
     state.set_report(payload)
-    url = server.url(server.start(state, host=args.host, port=args.port), args.host)
-    print(f"  Report:    {url}  ({args.serve_report}, Ctrl-C to stop)")
+    port = requested_port(args)
+    httpd, error = start_report_server(state, args.host, port, walk=args.port is None)
+    if httpd is None:
+        raise SystemExit(f"could not serve on port {port}: {error}")
+
+    url = server.url(httpd, args.host)
+    console.print_server(url, moved_from=port if httpd.server_port != port else None)
     if args.open_page:
         open_report(url)
     server.wait()
@@ -544,17 +582,18 @@ def main(argv: list[str] | None = None) -> None:
             run_id=run_id, line=line, verdict=verdict
         )
         from typesafe_sdk import TypeSafeClient as _TSC
+
         shared_reviewer = _TSC(**settings.typesafe_client_kwargs())
         state.reviewer = shared_reviewer
-        try:
-            httpd = server.start(state, host=args.host, port=args.port)
-        except OSError as error:
+        port = requested_port(args)
+        httpd, error = start_report_server(state, args.host, port, walk=args.port is None)
+        if httpd is None:
             state = None
             shared_reviewer = None
-            console.print_server_unavailable(args.port, error.strerror or str(error))
+            console.print_server_unavailable(port, error.strerror if error else "unknown")
         else:
             url = server.url(httpd, args.host)
-            console.print_server(url)
+            console.print_server(url, moved_from=port if httpd.server_port != port else None)
             # The page is served before the first round lands; it polls until there is
             # something to show, so opening it now is safe.
             if args.open_page:

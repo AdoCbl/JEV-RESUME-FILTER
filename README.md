@@ -147,7 +147,7 @@ per-round breakdown instead, because it is then the only view of the run there i
 | Flag | What it does |
 |---|---|
 | `--out PATH` | where to write the winning draft (default `example/polished_resume.txt`) |
-| `--port N` | port for the report page (default `8765`) |
+| `--port N` | report page port (default `8765`; steps to the next free one if busy) |
 | `--host H` | bind address (default `127.0.0.1`) |
 | `--no-serve` | skip the page and just run the loop |
 | `--no-open` | serve the page but do not open a browser at it |
@@ -232,6 +232,11 @@ own.
 Every run serves a live page at `http://127.0.0.1:8765` and opens it in your browser. Rounds
 appear as they finish, so a long run can be watched instead of waited for; `--no-open` serves
 it without opening anything.
+
+The page stays up after the run so you can read it and make the decisions it asks for, which
+means a previous run is often still holding the port. A run on the default port steps to the
+next free one and says so; `--port N` is honoured exactly, so a busy port there is reported
+instead of worked around.
 
 - **Versions** — the original plus every round, each with its overall score.
 - **Undo / Next** — step through the versions, with `←` and `→`; the timeline chips do

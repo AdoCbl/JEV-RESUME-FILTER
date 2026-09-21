@@ -62,6 +62,12 @@ the tables the page already draws. Two consequences followed:
   With `--no-serve` it keeps the full per-round breakdown, because then it is the only view of
   the run there is.
 
+**A busy port no longer costs you the page.** The server outlives its run, deliberately, so a
+finished run is usually still holding `8765` when the next one starts. The next run then had no
+page at all — which is the one thing the page is for. A run on the default port now steps to
+the next free one and says which and why; an explicit `--port N` is honoured exactly, so a busy
+port there is reported and the run continues without a page rather than silently moving.
+
 **Docs match the code.** `--out` was missing from the flag table, the page's lack of auth was
 undocumented (`--host 0.0.0.0` exposes a resume, now stated in the README), and
 `docs/data-flow.md` did not mention the live check that sends an edited draft to JEV, or the

@@ -46,15 +46,21 @@ def print_header(
     )
 
 
-def print_server(url: str) -> None:
+def print_server(url: str, moved_from: int | None = None) -> None:
     print(f"  Report:    {url}  (live, Ctrl-C to stop)")
+    if moved_from is not None:
+        print(
+            f"             port {moved_from} was busy — an earlier run is probably still"
+            " serving it"
+        )
 
 
 def print_server_unavailable(port: int, reason: str) -> None:
-    """Say why the page is not coming up, and how to get it, without losing the run."""
+    """Say why the page is not coming up, and what to do, without losing the run."""
+    print(f"  Report:    unavailable on port {port} ({reason})")
     print(
-        f"  Report:    unavailable on port {port} ({reason}) — another run may still be"
-        " serving it; rerun with --port N, or --no-serve to silence this"
+        "             stop the run that is holding it, or pass --port N. Carrying on"
+        " without a page: the full report is below."
     )
 
 
