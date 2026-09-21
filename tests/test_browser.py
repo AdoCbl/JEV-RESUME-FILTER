@@ -1,24 +1,36 @@
 """Browser smoke tests — requires Playwright and Chromium.
 
-Install once after adding to the dev group:
+Install once:
   uv run playwright install chromium
 
 These tests serve a real payload over a local HTTP server, load it in a headless
-browser, and verify that the page survives hostile resume content without a JS error
-and that the review buttons work end-to-end for lines containing quotes.
+browser, and check the page as a browser runs it: no JS error for any class of hostile
+resume text, the approve/reject buttons work, the ledger, coverage matrix and evidence
+render, the edit-and-recheck gate holds, and nothing overflows sideways.
 
-Done when: removing the data-line-index fix in page.py makes the approve-button test fail.
+They skip on a developer machine without Playwright, but not in CI: a suite that goes
+green without ever loading the page is how a dead approve button shipped.
 """
 from __future__ import annotations
 
+import importlib.util
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-pytest.importorskip("playwright", reason="playwright not installed; run: uv run playwright install chromium")
+if importlib.util.find_spec("playwright") is None:
+    if os.environ.get("CI"):
+        raise RuntimeError(
+            "playwright is required in CI: these tests are the only thing that loads the page"
+        )
+    pytest.skip(
+        "playwright not installed; run: uv run playwright install chromium",
+        allow_module_level=True,
+    )
 
-from playwright.sync_api import Page  # noqa: E402  (after importorskip)
+from playwright.sync_api import Page  # noqa: E402  (after the import check)
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 

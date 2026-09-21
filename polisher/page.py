@@ -19,30 +19,41 @@ _TEMPLATE = """<!doctype html>
   --text:#e7eaf0; --muted:#98a1b1; --accent:#c264ff; --good:#3ddc97; --bad:#ff6b6b; --warn:#ffc857;
 }
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);
+/* This is a page for a browser window, so it is laid out for one: a hard ceiling so a wide
+   monitor does not stretch a diff to 2000px, and two columns from a laptop width up. */
+body{margin:0 auto;max-width:1640px;background:var(--bg);color:var(--text);
   font:14px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 header{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;
   padding:16px 22px;border-bottom:1px solid var(--border)}
 h1{margin:0;font-size:15px;letter-spacing:.02em}
 .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 22px;
   border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:5}
+.sep{width:1px;height:22px;background:var(--border);margin:0 2px}
 button{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px;
   padding:7px 12px;font:inherit;cursor:pointer;transition:border-color .12s}
 button:hover:not(:disabled){border-color:var(--accent)}
 button:disabled{opacity:.4;cursor:default}
 button.primary{border-color:var(--accent);background:#26183a}
+button:focus-visible,.chip:focus-visible,.toggle input:focus-visible,
+input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+kbd{background:var(--panel2);border:1px solid var(--border);border-bottom-width:2px;
+  border-radius:4px;padding:0 5px;font:inherit;font-size:11.5px}
 .toggle{display:flex;gap:6px;align-items:center;color:var(--muted);cursor:pointer;user-select:none}
 .timeline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto}
+/* Below a wide desktop the versions take their own row rather than breaking the row in
+   the middle of the actions. */
+@media (max-width:1400px){.timeline{flex-basis:100%;margin-left:0}}
 .chip{display:flex;gap:7px;align-items:center;border:1px solid var(--border);border-radius:999px;
-  padding:5px 11px;background:var(--panel);cursor:pointer}
+  padding:4px 10px;font-size:13px;background:var(--panel);cursor:pointer}
 .chip.sel{border-color:var(--accent);background:#231535}
 .chip .n{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
 /* Two columns: what the draft scored beside what the draft says. The wide column gets the
-   text-shaped views (diff, ledger, coverage) because they have the longest strings. */
-main{display:grid;grid-template-columns:minmax(320px,370px) minmax(0,1fr);gap:18px;
+   text-shaped views (diff, ledger, coverage) because they have the longest strings. The
+   sidebar gives way before the text does, and only a genuinely narrow window stacks. */
+main{display:grid;grid-template-columns:clamp(300px,26%,380px) minmax(0,1fr);gap:18px;
   padding:18px 22px 34px;align-items:start}
-@media (max-width:1080px){main{grid-template-columns:1fr}
-  /* One column: the draft comes first, because that is what the page is for. */
+@media (max-width:1000px){main{grid-template-columns:1fr}
+  /* Narrow: one column, the draft first, because that is what the page is for. */
   .wide{order:-1}}
 .side,.wide{display:flex;flex-direction:column;gap:14px;min-width:0}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px}
@@ -117,8 +128,11 @@ footer{padding:0 22px 30px;color:var(--muted)}
 .claim{display:flex;gap:8px;align-items:baseline;padding:1px 0 1px 12px;font-size:12px;
   color:var(--muted)}
 /* One claim per line, clipped rather than wrapped: the claim set is a distribution to
-   scan, and the full text is in the line above and on hover. */
-.claim .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+   scan, and the full text is in the line above and on hover. The text shrinks to fit so a
+   marker can follow it rather than being pushed to the far edge of the row. */
+.claim .t{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.claim .fails{flex:0 0 auto;color:var(--bad);font-size:11px;text-transform:uppercase;
+  letter-spacing:.06em}
 .filters{display:flex;gap:6px;margin:8px 0 0;flex-wrap:wrap}
 .filters button{padding:3px 9px;font-size:12px}
 .filters button.on{border-color:var(--accent);background:#231535}
@@ -153,10 +167,13 @@ footer{padding:0 22px 30px;color:var(--muted)}
 <div class="toolbar">
   <button id="undo" title="previous version (←)">← Undo</button>
   <button id="next" title="next version (→)">Next →</button>
+  <span class="sep"></span>
   <button id="save" class="primary" title="write this version to the output file">Save this version</button>
   <span id="savestatus" class="note"></span>
+  <span class="sep"></span>
   <label class="toggle"><input type="checkbox" id="hide" checked /> hide unchanged (h)</label>
-  <label class="toggle"><input type="checkbox" id="vsorig" /> compare with original (c)</label>
+  <label class="toggle"><input type="checkbox" id="vsorig" /> compare original (c)</label>
+  <span class="sep"></span>
   <button id="rubric-btn" title="rubric weight controls (w)">Weights ▸</button>
   <button id="edit" title="edit this draft and re-check only the lines you change (e)">✎ Edit</button>
   <button id="saveedit" class="primary" style="display:none" title="write the edited draft to the output file">Save edited draft</button>
@@ -422,8 +439,12 @@ function ledgerItem(entry) {
   const claimRows = claims.length > 1
     ? claims.map((claim) => {
         const b = _band(claim.support);
+        // The claim that dragged the line down is the reason the line is flagged, so it is
+        // marked rather than left for the reader to find by comparing numbers.
+        const fails = entry.failing_claim && claim.text === entry.failing_claim
+          ? ` <span class="fails">fails</span>` : "";
         return `<div class="claim"><span class="p ${b}">${claim.support.toFixed(2)}</span>` +
-               `<span class="t" title="${esc(claim.text)}">${esc(claim.text)}</span></div>`;
+               `<span class="t" title="${esc(claim.text)}">${esc(claim.text)}</span>${fails}</div>`;
       }).join("")
     : "";
   const failing = entry.failing_claim && claims.length <= 1
@@ -517,7 +538,7 @@ function renderTotals() {
     <div class="kv">
       <span class="muted">audited</span><span>${trust.audited} lines · ${trust.carried} carried, not re-asked</span>
       <span class="muted">uncertain</span><span>${trust.uncertain} lines in the band · ${trust.low_confidence} dimension${trust.low_confidence === 1 ? "" : "s"} answered without confidence</span>
-      <span class="muted">needs a person</span><span>${trust.unsupported} unsupported line(s)</span>
+      <span class="muted">needs a person</span><span>${trust.unsupported} unsupported line${trust.unsupported === 1 ? "" : "s"}</span>
     </div>` : "";
   $("totals").innerHTML = `<div class="kv">
       <span class="muted">writer</span><span>${t.writer_calls || 0} calls · ${(t.writer_tokens || 0).toLocaleString()} tokens</span>
@@ -676,10 +697,16 @@ function render() {
     ? `round ${versions().length} running…`
     : (r.stop_reason || "");
   $("jd").textContent = r.job_description || "";
-  $("footer").innerHTML = `writer ${esc(cfg.writer_model || "")} · reviewer ${esc(cfg.reviewer_model || "")}
-    · up to ${cfg.max_iterations} rounds · stop when a round beats the best by less than
-    ${cfg.min_improvement} for ${cfg.patience} rounds, or at ${cfg.target_score}
-    · undo/next with ← →`;
+  $("footer").innerHTML = `<div>writer ${esc(cfg.writer_model || "")} · reviewer
+    ${esc(cfg.reviewer_model || "")} · stop when a round beats the best by less than
+    ${cfg.min_improvement} for ${cfg.patience} rounds, or reaches ${cfg.target_score}</div>
+    <div style="margin-top:8px">
+      <kbd>←</kbd> <kbd>→</kbd> versions ·
+      <kbd>h</kbd> hide unchanged ·
+      <kbd>c</kbd> compare with the original ·
+      <kbd>w</kbd> weights ·
+      <kbd>e</kbd> edit and re-check
+    </div>`;
   const newest = versions()[versions().length - 1];
   if (newest && newest.review && newest.index !== state.announced) {
     state.announced = newest.index;

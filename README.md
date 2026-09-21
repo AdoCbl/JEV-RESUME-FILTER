@@ -27,7 +27,9 @@ flowchart LR
         N["<b>3 Noul</b> — fabrication guardrails"]
         C["<b>1 Choice</b> — biggest remaining gap"]
         L["<b>N Noul</b> — one per draft line:<br/>is it supported by the original?"]
-        S ~~~ N ~~~ C ~~~ L
+        E["<b>N Choice</b> — which original line<br/>is this draft line's source?"]
+        V["<b>M Choice</b> — which draft line<br/>answers each job requirement?"]
+        S ~~~ N ~~~ C ~~~ L ~~~ E ~~~ V
     end
     R --> K{"code: keep the best draft,<br/>score it, decide"}
     K -- "still improving" --> W
@@ -44,8 +46,10 @@ extra latency.
 |---|---|---|
 | **Scorer** | 5 × `Score` (0–4 rubrics) | `jd_alignment`, `evidence_quality`, `jd_keyword_coverage`, `clarity_structure`, `impact_ownership` |
 | **Guardrail** | 3 × `Noul` | `invents_metrics`, `invents_facts`, `inflates_scope` — probability the draft added something the original resume does not support |
-| **Guardrail** | 1 × `Noul` per draft line | probability that line is grounded in the original resume |
+| **Guardrail** | 1 × `Noul` per draft line, and 1 per clause of a multi-clause line | probability that line, or that clause, is grounded in the original resume |
 | **Reviewer** | 1 × `Choice` | `biggest_gap` — which dimension to fix next |
+| **Evidence** | 1 × `Choice` per draft line | which of the original's lines (chosen in code by word overlap) is the source, or none |
+| **Coverage** | 1 × `Choice` per job requirement | which draft line answers it, or none |
 
 Code turns those judgments into two numbers:
 
@@ -64,8 +68,9 @@ mean over twenty lines would let one invented claim hide among nineteen grounded
 1. The writer drafts (round 1) or revises the **best draft so far**, given JEV's feedback:
    per-dimension scores with the rubric level each one sits at and what the level above
    asks for, the lines whose grounding is weakest (quoted, with probabilities), the biggest
-   gap, the attempt history, and the phrasings JEV rejected in losing attempts — so it does
-   not walk back into a worse draft or reuse wording that failed.
+   gap, the requirements the draft does not answer (named so they are left out, not invented),
+   the attempt history, and the phrasings JEV and any human reviewer rejected — so it does not
+   walk back into a worse draft or reuse wording that failed.
 2. JEV scores the draft, runs the fabrication checks across it, and audits its lines.
    A line that survived the revision unchanged keeps the verdict it already earned: it is
    not asked again, which saves input tokens and keeps its verdict from jittering, so score
@@ -104,9 +109,9 @@ Create `secrets.toml` (git-ignored):
 api_key = "YOUR_TYPESAFE_KEY"
 # model = "jev-latest"          # optional
 
-[deepseek]
+[writer]                        # any OpenAI-compatible provider
 api_key = "YOUR_DEEPSEEK_KEY"
-# model = "deepseek-flash"      # optional
+# model = "deepseek-chat"       # optional
 # base_url = "https://api.deepseek.com"
 
 [polish]                        # all optional
@@ -117,6 +122,8 @@ api_key = "YOUR_DEEPSEEK_KEY"
 # request_timeout = 120.0        # seconds to wait on one model call
 # max_retries = 2                # retries per call on a provider error or timeout
 ```
+
+`[deepseek]` is still accepted as an alias for `[writer]`.
 
 ## Run
 
@@ -133,6 +140,7 @@ support, and the biggest gap. The run ends with the winning round and a token/la
 
 | Flag | What it does |
 |---|---|
+| `--out PATH` | where to write the winning draft (default `example/polished_resume.txt`) |
 | `--port N` | port for the report page (default `8765`) |
 | `--host H` | bind address (default `127.0.0.1`) |
 | `--no-serve` | skip the page and just run the loop |
@@ -194,6 +202,10 @@ neither is written.
 A resume is personal data and it is sent to two third parties. `docs/data-flow.md` lists
 exactly what leaves the machine and to whom. `--redact` strips email, phone, address, and
 links before any request; `--no-store` writes nothing to disk at all.
+
+The page listens on `127.0.0.1` and has no login: it can read the run's payload and write
+the output file. `--host 0.0.0.0` therefore exposes a resume and its output to anyone who
+can reach the port. Bind off localhost only behind something that authenticates.
 
 ### Exit codes
 
@@ -287,9 +299,18 @@ loop can be tested with no API keys.
   already accepted, so a round is not spent on cosmetic edits.
 - **Writer behavior** — `TEMPERATURE` in `writer.py`.
 
-## Linting
+## Checks
 
 ```bash
 uv run ruff check .
-uv run ruff format .
+uv run pytest                      # no API keys needed: the fakes are in tests/conftest.py
+uv run pytest --cov=polisher --cov-report=term-missing
+```
+
+The suite includes browser tests that serve a real payload, load the page in headless
+Chromium, and fail on any JavaScript error, dead button, or sideways overflow. Install the
+browser once; without it those tests skip, and in CI they are required:
+
+```bash
+uv run playwright install chromium
 ```

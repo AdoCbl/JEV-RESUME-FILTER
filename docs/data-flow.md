@@ -11,9 +11,26 @@ The following fields are sent to the TypeSafe API on every review round:
 | `original_resume` | Yes | The source-of-truth text for grounding checks |
 | `job_description` | Yes | The target role |
 | `candidate_resume` | Yes | The draft being reviewed |
-| Per-line text (up to 60 lines) | Yes | Each audited line, as individual Noul questions |
+| Candidate source lines | Yes | Up to 12 original-resume lines per draft line, chosen in code by word overlap, as the options of one `Choice` |
+| Job requirements | Yes | Up to 20 requirements, split from the job description in code, one `Choice` each |
+| Per-line text (up to 60 lines) | Yes | Each audited line, as an individual Noul question |
+| Per-claim text | Yes | The clauses of a multi-clause line, one Noul each |
 
-TypeSafe's subprocessor list and data retention policy are at https://typesafe.ai/privacy.
+Everything above travels in **one request per round**. TypeSafe's subprocessor list and
+data retention policy are at https://typesafe.ai/privacy.
+
+### TypeSafe (live check, only when you edit)
+
+Editing a draft on the page sends that draft to the same endpoint, with one difference:
+only the lines that changed are asked about. Unchanged lines keep the verdict they already
+had and are sent as context only. No request is made unless you edit, and no writer call is
+made at all.
+
+| Field | Sent? | Notes |
+|---|---|---|
+| `original_resume` | Yes | The grounding source |
+| `candidate_resume` | Yes | The edited draft |
+| Per-line and per-claim text | Changed lines only | The questions in `judge.line_questions` |
 
 ### Writer LLM (any OpenAI-compatible provider)
 
@@ -49,12 +66,13 @@ The original, unredacted text is never sent to any API when `--redact` is active
 When `--no-store` is passed:
 
 - No round files are written to `runs/`
-- No `polished_resume.txt` is written
+- No `polished_resume.txt` is written by the loop; the page can still be asked to save a
+  version, and that is the only thing that writes the output file
 - No `UNRESOLVED.md` is written
-- No audit log is written
-- `--report-json` is silently ignored
+- No audit log is written, so a decision lives only in the running page
+- `--report-json` is ignored, and `--batch` writes no per-pair payload
 
-All processing happens in memory only.
+All processing otherwise happens in memory only.
 
 ## Retention
 
@@ -65,6 +83,9 @@ Run artefacts are stored in `runs/<run-id>/`:
 - `audit.jsonl` — human sign-off decisions
 
 To delete a run's data: `resume-polisher --purge runs/<run-id>`
+
+`--batch` additionally writes `<out>_report.json` per pair — the payload its index page
+links to — and `<pairs>.index.html`.
 
 No data is sent to any third party other than the two APIs listed above.
 

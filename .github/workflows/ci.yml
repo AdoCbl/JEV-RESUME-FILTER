@@ -19,6 +19,12 @@ jobs:
       - name: Install dependencies
         run: uv sync --group dev
 
+      # The page is the part a person touches, and substring assertions cannot see a broken
+      # one. Without a browser here, tests/test_browser.py skips and CI is green about a page
+      # it never loaded.
+      - name: Install Chromium for the page tests
+        run: uv run playwright install --with-deps chromium
+
       - name: Lint
         run: uv run ruff check .
 

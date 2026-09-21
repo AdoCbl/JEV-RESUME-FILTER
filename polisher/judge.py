@@ -43,6 +43,7 @@ FABRICATION_BLOCK = 0.5  # at or above this the draft must be fixed before anyth
 MIN_CLAIM_CHARS = 12  # shorter lines are headings or contact details, not claims
 MAX_AUDIT_LINES = 60  # cap on the per-line grounding questions in one round
 MAX_REQUIREMENTS = 20  # cap on JD requirements extracted for the coverage matrix
+MAX_UNCOVERED_IN_FEEDBACK = 8  # cap on unanswered requirements quoted back to the writer
 
 # ── Quality dimensions ────────────────────────────────────────────────────────
 # One Score question per dimension, each measuring one thing. The weights are code,
@@ -585,6 +586,16 @@ class Review:
                 + ", ".join(self.low_confidence)
                 + ". Make the resume explicit enough for these to be easy to judge."
             )
+        # A requirement the draft does not answer is a fact about the candidate, not a gap in
+        # the writing: the instruction is to leave it out, because the alternative the writer
+        # has is to invent the evidence.
+        uncovered = [req for req, line in self.coverage.items() if line is None]
+        if uncovered:
+            lines.append(
+                "REQUIREMENTS WITH NO EVIDENCE IN THIS DRAFT (leave these out; do not invent "
+                "support for them)"
+            )
+            lines.extend(f"    - {req}" for req in uncovered[:MAX_UNCOVERED_IN_FEEDBACK])
         ranked = sorted(self.gap_distribution.items(), key=lambda item: -item[1])
         lines.append("BIGGEST GAP")
         if not self.gap_is_split:

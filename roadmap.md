@@ -7,9 +7,34 @@ dimensions, guards three fabrication checks, and audits the draft line by line �
 claim by claim inside each line. Code keeps the best draft and stops when a round stops
 paying. Round files, resumability, budgets, a versioned manifest, a live report page with
 per-round diffs, a human sign-off gate with an append-only audit log, privacy flags, and
-batch mode are all in place, with `ruff` clean and 132 tests passing on a checkout with no
-API keys (88% coverage on `polisher/`, including thirteen Playwright tests that load the
-page in a browser and click it).
+batch mode are all in place, with `ruff` clean and 137 tests passing on a checkout with no
+API keys (88% coverage on `polisher/`, including fifteen Playwright tests that load the
+page in a browser and click it — and CI now installs Chromium, so they run there instead of
+skipping quietly).
+
+## What the last round changed
+
+**The page is laid out for a browser.** It was two columns of the wrong widths — the long
+strings (a bullet, its claims, a job requirement) in the narrow one, a wide column running
+out of things to show — so half the page was empty. Now: numbers in the sidebar, text in the
+wide column, flagged lines directly under the diff where the wording they judge is, one
+block shape for every measurement, a width ceiling so a 2560px monitor does not stretch a
+diff into a single unreadable line, and two columns from a 1024px window down to a single
+column only on genuinely narrow screens. A test asserts the page never scrolls sideways from
+1500px to 700px, because that is what a layout like this breaks silently.
+
+**The chrome reads as a desktop app.** Grouped toolbar, version chips on their own row below
+a wide desktop, focus rings for keyboard use, keyboard hints in the footer, and a ledger
+claim marked *fails* when it is the clause that dragged its line down.
+
+**CI actually loads the page.** `tests/test_browser.py` only skipped when Playwright was
+missing, which is exactly what CI was: green about a page it never opened. CI installs
+Chromium, and the suite now refuses to skip in CI rather than reporting success.
+
+**Docs match the code.** `--out` was missing from the flag table, the page's lack of auth was
+undocumented (`--host 0.0.0.0` exposes a resume, now stated in the README), and
+`docs/data-flow.md` did not mention the live check that sends an edited draft to JEV, or the
+coverage and source-line questions that travel with every round.
 
 ## What this pass changed
 
@@ -113,10 +138,11 @@ Two rules hold the theme together:
 
 ## 1. A browser smoke test, and a page that survives hostile content
 
-**Status: done.** Thirteen Playwright tests serve real payloads, fail on any `pageerror` or
+**Status: done.** Fifteen Playwright tests serve real payloads, fail on any `pageerror` or
 console error, and click approve/reject; the fixtures include double and single quotes,
 `</script>`, HTML tags, emoji, an RTL line, and a 400-character bullet. The hostile text now
-flows through the ledger and coverage renderers too.
+flows through the ledger and coverage renderers too, and CI installs Chromium so the tests
+run there rather than skipping.
 
 *Why:* a test asserted the page contains `<!doctype html>` and passed while the approve
 button was dead for any resume line with a quote in it. Substring assertions cannot see a
@@ -226,10 +252,11 @@ weak claim that fails, and a reviewer can filter a run down to its uncertain cla
 
 ## 6. A coverage matrix for the job description
 
-**Status: done for the matrix.** Requirements are split in code, one `Choice` per
-requirement runs in the same round request, and the page shows the verdict, the draft line
-that answers it, and an empty cell that reads as *leave it out rather than invent it*.
-**Still open:** ranking the uncovered requirements by how central they look.
+**Status: done.** Requirements are split in code, one `Choice` per requirement runs in the
+same round request, and the page shows the verdict, the draft line that answers it, and an
+empty cell that reads as *leave it out rather than invent it*. The uncovered list is also
+handed to the writer on the next round, named as things to leave out. **Still open:**
+ranking the uncovered requirements by how central they look.
 
 *Why:* `jd_keyword_coverage` is one number for the whole resume, and
 `jd_alignment` is one number for the whole application. Neither tells a person which

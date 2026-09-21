@@ -6,7 +6,7 @@ from polisher.judge import (
     claim_lines,
     split_claims,
 )
-from tests.conftest import FakeNoul, FakeScore, FakeTypeSafeClient, make_review_answers
+from tests.conftest import FakeChoice, FakeNoul, FakeScore, FakeTypeSafeClient, make_review_answers
 
 ORIGINAL = "Led the platform team at Acme Corp for three years. Cut p95 latency by 40%."
 DRAFT = "Led the platform team at Acme Corp. Reduced p95 latency by 40% through caching."
@@ -158,3 +158,33 @@ def test_a_fabricated_claim_inside_a_true_bullet_weakens_the_line() -> None:
     assert audited[0].support == 0.10
     assert audited[0].failing_claim is not None
     assert "90%" in audited[0].failing_claim
+
+
+# ── Unanswered requirements reach the writer ──────────────────────────────────
+
+JD = "We need a backend engineer with distributed systems experience."
+
+
+def test_feedback_names_the_requirements_the_draft_does_not_answer() -> None:
+    """The coverage verdict is only useful if the next round is told about it."""
+    from polisher.judge import review
+
+    client = FakeTypeSafeClient(make_review_answers(len(claim_lines(DRAFT))))
+    r = review(client, original_resume=ORIGINAL, job_description=JD, draft=DRAFT)
+
+    assert r.coverage == {JD: None}, "the stub answers every coverage question with 'none'"
+    feedback = r.feedback()
+    assert "REQUIREMENTS WITH NO EVIDENCE IN THIS DRAFT" in feedback
+    assert JD in feedback
+    assert "do not invent" in feedback
+
+
+def test_feedback_stays_quiet_when_every_requirement_is_answered() -> None:
+    from polisher.judge import review
+
+    answers = make_review_answers(len(claim_lines(DRAFT)))
+    answers["cov_00"] = FakeChoice(choice="0")
+    client = FakeTypeSafeClient(answers)
+    r = review(client, original_resume=ORIGINAL, job_description=JD, draft=DRAFT)
+
+    assert "REQUIREMENTS WITH NO EVIDENCE" not in r.feedback()
