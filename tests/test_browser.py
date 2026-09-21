@@ -395,7 +395,29 @@ def test_a_line_with_no_source_says_so(page: Page, tmp_path: Path) -> None:
         httpd.shutdown()
 
 
+def test_the_page_never_scrolls_sideways(page: Page, tmp_path: Path) -> None:
+    """The two-column layout has to fold into one without pushing the page wide."""
+    from polisher.server import ReportState, start
+
+    state = ReportState(output_path=tmp_path / "out.txt")
+    state.set_report(_make_report("Led the platform team at Acme Corp for three years"))
+    httpd = start(state, host="127.0.0.1", port=0)
+    try:
+        page.goto(f"http://127.0.0.1:{httpd.server_port}")
+        page.wait_for_selector("#scores", timeout=3000)
+        for width in (1500, 1280, 1080, 900, 700):
+            page.set_viewport_size({"width": width, "height": 900})
+            page.wait_for_timeout(60)
+            overflow = page.evaluate(
+                "() => document.documentElement.scrollWidth - window.innerWidth"
+            )
+            assert overflow <= 1, f"{width}px viewport overflows by {overflow}px"
+    finally:
+        httpd.shutdown()
+
+
 # ── Editing a draft, with the reviewer in the gutter ─────────────────────────
+
 EDITABLE_LINE = "Led the platform team at Acme Corp"
 
 

@@ -37,10 +37,16 @@ button.primary{border-color:var(--accent);background:#26183a}
   padding:5px 11px;background:var(--panel);cursor:pointer}
 .chip.sel{border-color:var(--accent);background:#231535}
 .chip .n{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
-main{display:grid;grid-template-columns:minmax(330px,390px) 1fr;gap:18px;padding:18px 22px 34px}
-@media (max-width:940px){main{grid-template-columns:1fr}}
+/* Two columns: what the draft scored beside what the draft says. The wide column gets the
+   text-shaped views (diff, ledger, coverage) because they have the longest strings. */
+main{display:grid;grid-template-columns:minmax(320px,370px) minmax(0,1fr);gap:18px;
+  padding:18px 22px 34px;align-items:start}
+@media (max-width:1080px){main{grid-template-columns:1fr}
+  /* One column: the draft comes first, because that is what the page is for. */
+  .wide{order:-1}}
+.side,.wide{display:flex;flex-direction:column;gap:14px;min-width:0}
 .card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px}
-.card + .card{margin-top:14px}
+.card:empty{display:none}
 .card h2{margin:0 0 12px;font-size:11px;letter-spacing:.11em;text-transform:uppercase;color:var(--muted)}
 .muted{color:var(--muted)}
 .big{font-size:34px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1}
@@ -53,6 +59,21 @@ main{display:grid;grid-template-columns:minmax(330px,390px) 1fr;gap:18px;padding
 .num{font-variant-numeric:tabular-nums;min-width:44px;text-align:right}
 .delta{font-variant-numeric:tabular-nums;font-size:12px;min-width:52px;text-align:right}
 .up{color:var(--good)} .down{color:var(--bad)} .flat{color:var(--muted)}
+/* One measurement: its numbers on a line, the bar underneath. A long name gets the whole
+   line to itself instead of being cut off to make room for a bar beside it. */
+.dim{margin:9px 0}
+.dim .head{display:flex;gap:8px;align-items:baseline}
+.dim .head .label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dim .head .lv{flex:0 0 auto;color:var(--muted);font-size:11px;border:1px solid var(--border);
+  border-radius:4px;padding:0 4px}
+.dim .head .meta{flex:0 0 auto;color:var(--muted);font-size:12px;white-space:nowrap}
+.dim > .bar{display:block;height:6px;margin-top:4px}
+/* Flagged lines get their own block: the line, then the decision, so a two-line bullet
+   does not push its own buttons out of the card. */
+.flagged{list-style:none;margin:8px 0 0;padding:0}
+.flagged li{border-top:1px solid var(--border);padding:8px 0}
+.flagged .acts{display:flex;gap:6px;margin-top:6px}
+.flagged .acts button{padding:3px 9px;font-size:12px}
 .badge{border:1px solid var(--border);border-radius:999px;padding:2px 9px;font-size:12px;color:var(--muted)}
 .badge.live{border-color:var(--accent);color:var(--accent)}
 .badge.blocked{border-color:var(--bad);color:var(--bad)}
@@ -88,12 +109,16 @@ footer{padding:0 22px 30px;color:var(--muted)}
   clip:rect(0,0,0,0);white-space:nowrap;border:0}
 /* Grounding ledger: the distribution behind the mean, with the uncertain band visible. */
 .unc{color:var(--warn)} .bad{color:var(--bad)} .ok{color:var(--good)}
-.ledger{list-style:none;margin:8px 0 0;padding:0;max-height:320px;overflow:auto}
-.ledger li{border-top:1px solid var(--border);padding:6px 0}
+.ledger{list-style:none;margin:8px 0 0;padding:0;max-height:360px;overflow:auto}
+.ledger li{border-top:1px solid var(--border);padding:7px 0}
 .ledger .ln{display:flex;gap:8px;align-items:baseline}
-.ledger .ln .t{flex:1;word-break:break-word}
+.ledger .ln .t{flex:1;min-width:0;word-break:break-word}
 .ledger .p{font-variant-numeric:tabular-nums;min-width:34px;text-align:right;flex:0 0 34px}
-.claim{display:flex;gap:8px;align-items:baseline;padding:1px 0 1px 12px;font-size:12px;color:var(--muted)}
+.claim{display:flex;gap:8px;align-items:baseline;padding:1px 0 1px 12px;font-size:12px;
+  color:var(--muted)}
+/* One claim per line, clipped rather than wrapped: the claim set is a distribution to
+   scan, and the full text is in the line above and on hover. */
+.claim .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .filters{display:flex;gap:6px;margin:8px 0 0;flex-wrap:wrap}
 .filters button{padding:3px 9px;font-size:12px}
 .filters button.on{border-color:var(--accent);background:#231535}
@@ -151,23 +176,25 @@ footer{padding:0 22px 30px;color:var(--muted)}
 </div>
 
 <main>
-  <div>
+  <div class="side">
     <div class="card" id="scores"></div>
+    <div class="card"><h2>Run totals</h2><div id="totals"></div></div>
+  </div>
+  <div class="wide">
+    <div class="card" style="padding:0;background:none;border:none">
+      <div class="diff">
+        <div class="head" id="diffhead"></div>
+        <div class="body" id="diff"></div>
+      </div>
+    </div>
+    <div class="card" id="flagged"></div>
     <div class="card" id="ledger"></div>
-    <div class="card" id="meta"></div>
     <div class="card"><h2>Job description</h2>
       <details><summary>show the target</summary>
         <p class="mono" id="jd" style="white-space:pre-wrap"></p>
       </details>
       <div id="coverage"></div>
     </div>
-  </div>
-  <div class="card" style="padding:0;background:none;border:none">
-    <div class="diff">
-      <div class="head" id="diffhead"></div>
-      <div class="body" id="diff"></div>
-    </div>
-    <div class="card" style="margin-top:14px"><h2>Run totals</h2><div class="kv" id="totals"></div></div>
   </div>
 </main>
 
@@ -208,23 +235,24 @@ function scoreRows(v, prev) {
     const s = v.review.scores[name];
     const before = prev && prev.review ? prev.review.scores[name].score : null;
     const low = s.confidence < (cfg.confidence_floor ?? 0.6) ? " ⚠" : "";
-    return `<div class="row">
-      <span class="label" title="${esc(name)} — level ${s.level} of ${cfg.top_level}: ${esc(s.level_text)}">${esc(name)} <span class="muted">L${s.level}</span></span>
+    return `<div class="dim">
+      <div class="head">
+        <span class="label" title="${esc(name)} — level ${s.level} of ${cfg.top_level}: ${esc(s.level_text)}">${esc(name)}</span>
+        <span class="lv" title="rubric level ${s.level} of ${cfg.top_level}">L${s.level}</span>
+        <span class="num">${s.score.toFixed(2)}/4</span>
+        ${delta(s.score, before)}
+        <span class="meta" title="reviewer confidence">${s.confidence.toFixed(2)}${low}</span>
+      </div>
       ${bar(s.normalized, "")}
-      <span class="num">${s.score.toFixed(2)}/4</span>
-      ${delta(s.score, before)}
-      <span class="num muted" title="reviewer confidence">${s.confidence.toFixed(2)}${low}</span>
     </div>`;
   }).join("");
 }
 function guardrailRows(v) {
   const g = v.review.guardrails || {};
-  return Object.entries(g).sort((a, b) => b[1] - a[1]).map(([name, p]) => `<div class="row">
-    <span class="label">${esc(name)}</span>
+  return Object.entries(g).sort((a, b) => b[1] - a[1]).map(([name, p]) => `<div class="dim">
+    <div class="head"><span class="label">${esc(name)}</span>
+      <span class="num">${p.toFixed(2)}</span></div>
     ${bar(p, "bad")}
-    <span class="num">${p.toFixed(2)}</span>
-    <span class="delta flat"></span>
-    <span class="num muted"></span>
   </div>`).join("");
 }
 
@@ -246,26 +274,9 @@ function renderScores() {
         .slice(0, 2).map(([n, p]) => `${esc(n)} ${p.toFixed(2)}`).join(" and ")
     : esc(r.biggest_gap);
   const weakest = r.weakest_line
-    ? `<div class="row"><span class="label">weakest line</span>
-       <span class="num">${r.weakest_line.support.toFixed(2)}</span>
-       <span class="muted mono" style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(r.weakest_line.text)}</span></div>`
-    : "";
-  // The buttons carry the flagged line's position, never its text: a line containing a
-  // quote cannot break out of an HTML attribute, and the click handler reads the text
-  // back from the payload, so nothing user-supplied is interpolated into markup.
-  const flagged = r.flagged_lines.length
-    ? `<h2 style="margin-top:14px">Unsupported lines (${r.flagged_lines.length})</h2>
-       <ul class="list mono">${r.flagged_lines.map((t, i) => {
-         const dec = (r.lines_to_review || []).find(l => l.text === t);
-         const d = dec && dec.decision;
-         const badge = d ? ` <span class="badge" style="color:${d === 'approved' ? 'var(--good)' : 'var(--bad)'}">${esc(d)}</span>` : '';
-         const btns = d ? ''
-           : ` <button class="review" data-version="${v.index}" data-line-index="${i}"`
-             + ` data-verdict="approved" style="padding:2px 7px;font-size:11px">✓ Approve</button>`
-             + ` <button class="review" data-version="${v.index}" data-line-index="${i}"`
-             + ` data-verdict="rejected" style="padding:2px 7px;font-size:11px;border-color:var(--bad)">✗ Reject</button>`;
-         return `<li>${esc(t)}${badge}${btns}</li>`;
-       }).join("")}</ul>`
+    ? `<div class="dim"><div class="head"><span class="label">weakest line</span>
+       <span class="num">${r.weakest_line.support.toFixed(2)}</span></div>
+       <div class="note mono" style="margin-top:2px">${esc(r.weakest_line.text)}</div></div>`
     : "";
   // Built as its own variable: an escaped quote inside a template literal is a syntax
   // error that takes the whole page down, and the browser is the only thing that catches it.
@@ -284,39 +295,53 @@ function renderScores() {
     ${scoreRows(v, prev)}
     <h2 style="margin-top:16px">Fabrication checks</h2>
     ${guardrailRows(v)}
-    <div class="row"><span class="label">line grounding</span>
-      ${bar(r.line_grounding, "good")}
+    <div class="dim"><div class="head"><span class="label">line grounding</span>
       <span class="num">${r.line_grounding.toFixed(2)}</span>
-      <span class="delta flat" title="${r.reused_lines} lines carried over from the previous draft">${r.audited_lines} lines · ${r.reused_lines} carried</span>
-      <span class="num muted"></span></div>
+      <span class="meta" title="${r.reused_lines} lines were carried over from the previous draft instead of re-asked">${r.audited_lines} lines · ${r.reused_lines} carried</span></div>
+      ${bar(r.line_grounding, "good")}</div>
     ${weakest}
     <h2 style="margin-top:16px">Biggest gap</h2>
     <p class="muted" style="margin:0">${gap}</p>
-    ${flagged}`;
+    <div class="note" style="margin-top:16px;border-top:1px solid var(--border);padding-top:10px">
+      ${v.chars.toLocaleString()} chars · ${v.words} words · ${v.lines} lines ·
+      ${v.saved ? "saved to " + esc(state.report.paths ? state.report.paths.out : "the output file") : "not saved"}
+    </div>`;
 }
 
-function renderMeta() {
+// The lines the reviewer could not ground, with the decision they need. They sit under the
+// diff because they are about the text: the writer's wording, then the verdict on it.
+// The buttons carry the flagged line's position, never its text: a line containing a quote
+// cannot break out of an HTML attribute, and the click handler reads the text back from the
+// payload, so nothing user-supplied is interpolated into markup.
+function renderFlagged() {
+  const el = $("flagged");
   const v = current();
-  const cfg = state.report.config || {};
-  const paths = state.report.paths || {};
-  if (!v) { $("meta").innerHTML = ""; return; }
-  const cost = v.review
-    ? `<div class="kv">
-        <span class="muted">writer</span><span>${esc(v.review.writer.model)}
-          · ${v.review.writer.latency_ms / 1000}s
-          · ${(v.review.writer.total_tokens || 0).toLocaleString()} tokens</span>
-        <span class="muted">reviewer</span><span>${esc(v.review.reviewer.model)}
-          · ${v.review.reviewer.latency_ms / 1000}s
-          · ${(v.review.reviewer.total_tokens || 0).toLocaleString()} tokens</span>
-      </div>`
-    : `<div class="kv"><span class="muted">writer</span><span>${esc(cfg.writer_model || "")}</span>
-        <span class="muted">reviewer</span><span>${esc(cfg.reviewer_model || "")}</span></div>`;
-  $("meta").innerHTML = `<h2>${esc(v.label)}</h2>
-    <div class="kv">
-      <span class="muted">chars</span><span>${v.chars.toLocaleString()} · ${v.words} words · ${v.lines} lines</span>
-      <span class="muted">file</span><span class="mono">${v.saved ? esc(paths.out) + " (saved)" : "—"}</span>
-    </div>
-    <h2 style="margin-top:14px">Cost this round</h2>${cost}`;
+  const r = v && v.review;
+  const lines = (r && r.flagged_lines) || [];
+  if (!lines.length) {
+    el.innerHTML = "";
+    return;
+  }
+  el.innerHTML = `<h2>Unsupported lines (${lines.length})</h2>
+    <p class="note" style="margin:0 0 4px">A line here is one the reviewer does not believe the
+      original resume supports. Each needs an approve/reject decision before it ships, and a
+      rejection goes back to the writer.</p>
+    <ul class="flagged">${lines.map((text, i) => {
+      const entry = (r.lines_to_review || []).find((line) => line.text === text);
+      const decision = entry && entry.decision;
+      const claim = entry && entry.failing_claim
+        ? `<div class="note">failing claim: “${esc(entry.failing_claim)}”</div>`
+        : "";
+      const badge = decision
+        ? ` <span class="badge" style="color:${decision === "approved" ? "var(--good)" : "var(--bad)"}">${esc(decision)}</span>`
+        : "";
+      const acts = decision ? ""
+        : `<div class="acts">
+             <button class="review" data-version="${v.index}" data-line-index="${i}" data-verdict="approved">✓ Approve</button>
+             <button class="review" data-version="${v.index}" data-line-index="${i}" data-verdict="rejected" style="border-color:var(--bad)">✗ Reject</button>
+           </div>`;
+      return `<li><div class="mono">${esc(text)}${badge}</div>${claim}${acts}</li>`;
+    }).join("")}</ul>`;
 }
 
 function diffRows(v) {
@@ -398,7 +423,7 @@ function ledgerItem(entry) {
     ? claims.map((claim) => {
         const b = _band(claim.support);
         return `<div class="claim"><span class="p ${b}">${claim.support.toFixed(2)}</span>` +
-               `<span>${esc(claim.text)}</span></div>`;
+               `<span class="t" title="${esc(claim.text)}">${esc(claim.text)}</span></div>`;
       }).join("")
     : "";
   const failing = entry.failing_claim && claims.length <= 1
@@ -480,10 +505,10 @@ function renderTotals() {
     const w = (v.review.writer && v.review.writer.total_tokens) || 0;
     const rv = (v.review.reviewer && v.review.reviewer.total_tokens) || 0;
     const sum = w + rv || 1;
-    return `<div class="row"><span class="label">${esc(v.label)}</span>
-      <span class="bar" title="reviewer share of this round's tokens"><i style="width:${(rv / sum) * 100}%"></i></span>
-      <span class="delta" title="writer tokens">${w.toLocaleString()}w</span>
-      <span class="delta" title="reviewer tokens">${rv.toLocaleString()}r</span></div>`;
+    return `<div class="dim"><div class="head"><span class="label">${esc(v.label)}</span>
+      <span class="meta" title="writer tokens">${w.toLocaleString()}w</span>
+      <span class="meta" title="reviewer tokens">${rv.toLocaleString()}r</span></div>
+      <span class="bar" title="reviewer share of this round's tokens"><i style="width:${(rv / sum) * 100}%"></i></span></div>`;
   }).join("");
   const best = versions().filter((v) => v.review && v.review.is_best).pop()
     || versions().filter((v) => v.review).pop();
@@ -491,7 +516,7 @@ function renderTotals() {
   const trustStrip = trust ? `<h2 style="margin-top:14px">How much to trust ${esc(best.label)}</h2>
     <div class="kv">
       <span class="muted">audited</span><span>${trust.audited} lines · ${trust.carried} carried, not re-asked</span>
-      <span class="muted">uncertain</span><span>${trust.uncertain} lines in the band · ${trust.low_confidence} dimension(s) answered without confidence</span>
+      <span class="muted">uncertain</span><span>${trust.uncertain} lines in the band · ${trust.low_confidence} dimension${trust.low_confidence === 1 ? "" : "s"} answered without confidence</span>
       <span class="muted">needs a person</span><span>${trust.unsupported} unsupported line(s)</span>
     </div>` : "";
   $("totals").innerHTML = `<div class="kv">
@@ -676,8 +701,8 @@ function render() {
     : "edit this draft and re-check only the lines you change (e)";
   renderTimeline();
   renderScores();
+  renderFlagged();
   renderLedger();
-  renderMeta();
   renderCoverage();
   renderDiff();
   renderTotals();
@@ -751,7 +776,7 @@ async function refresh() {
 
 // Delegated: the flagged list is rebuilt on every render, so one listener on the card
 // covers every review button the page will ever contain.
-$("scores").addEventListener("click", (event) => {
+$("flagged").addEventListener("click", (event) => {
   const button = event.target.closest("button.review");
   if (!button) return;
   const version = versions().find((v) => v.index === Number(button.dataset.version));
