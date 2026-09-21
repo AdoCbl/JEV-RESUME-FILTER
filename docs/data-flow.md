@@ -82,7 +82,7 @@ Run artefacts are stored in `runs/<run-id>/`:
 - `round-N.json` — each round's draft, review scores, and metrics
 - `audit.jsonl` — human sign-off decisions
 
-To delete a run's data: `resume-polisher --purge runs/<run-id>`
+To delete a run's data: `uv run resume-polisher --purge runs/<run-id>`
 
 `--batch` additionally writes `<out>_report.json` per pair — the payload its index page
 links to — and `<pairs>.index.html`.

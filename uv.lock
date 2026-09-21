@@ -320,7 +320,7 @@ wheels = [
 [[package]]
 name = "jev-resume-polisher"
 version = "0.2.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "openai" },
     { name = "typesafe-sdk" },

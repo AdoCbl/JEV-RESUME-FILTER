@@ -30,3 +30,15 @@ jobs:
 
       - name: Test
         run: uv run pytest --cov=polisher --cov-report=term-missing --cov-fail-under=80
+
+      # The docs and the batch index tell a person to run `resume-polisher`. A virtual project
+      # skips that entry point with only a warning, so build the wheel and run the command
+      # from it, in a venv that has nothing else in it.
+      - name: Build the wheel
+        run: uv build --wheel --out-dir dist
+
+      - name: Check the installed command
+        run: |
+          uv venv /tmp/installed --python 3.14
+          uv pip install --python /tmp/installed/bin/python dist/*.whl
+          /tmp/installed/bin/resume-polisher --help

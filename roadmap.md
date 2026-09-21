@@ -31,6 +31,14 @@ claim marked *fails* when it is the clause that dragged its line down.
 missing, which is exactly what CI was: green about a page it never opened. CI installs
 Chromium, and the suite now refuses to skip in CI rather than reporting success.
 
+**The declared command actually installs.** `[project.scripts]` without a build system makes
+the project *virtual*, and uv then skips the entry point with a warning nobody reads: the
+`resume-polisher` command in the README, the batch index, and `docs/data-flow.md` did not
+exist. The project is packaged now (`uv_build`, module at the repository root, named
+`polisher`), CI builds the wheel and runs `resume-polisher --help` from it in an empty venv,
+and a test asserts the declaration and the build configuration together — the failure was the
+combination, not either half.
+
 **Docs match the code.** `--out` was missing from the flag table, the page's lack of auth was
 undocumented (`--host 0.0.0.0` exposes a resume, now stated in the README), and
 `docs/data-flow.md` did not mention the live check that sends an edited draft to JEV, or the
@@ -142,7 +150,8 @@ Two rules hold the theme together:
 console error, and click approve/reject; the fixtures include double and single quotes,
 `</script>`, HTML tags, emoji, an RTL line, and a 400-character bullet. The hostile text now
 flows through the ledger and coverage renderers too, and CI installs Chromium so the tests
-run there rather than skipping.
+run there rather than skipping. CI also builds the wheel and runs `resume-polisher --help`
+from it in a clean venv, so the packaged command is exercised and not only the checkout.
 
 *Why:* a test asserted the page contains `<!doctype html>` and passed while the approve
 button was dead for any resume line with a quote in it. Substring assertions cannot see a

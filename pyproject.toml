@@ -12,6 +12,17 @@ dependencies = [
 [project.scripts]
 resume-polisher = "polisher.cli:main"
 
+# Without a build system the project is "virtual": uv skips the entry point above and
+# `resume-polisher` does not exist. The module is at the repository root, not under src/,
+# and is named `polisher` rather than after the distribution.
+[build-system]
+requires = ["uv_build>=0.7.19,<0.8.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = "polisher"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",

@@ -335,7 +335,7 @@ tr:hover{{background:rgba(255,255,255,.03)}}
 <h1>Batch: {_html.escape(path.stem)} &nbsp;<span style="color:#98a1b1;font-weight:normal">
   sorted by unresolved flagged lines, then fabrication risk.</span></h1>
 <p style="margin:0 20px 14px;color:#98a1b1;font-size:13px">
-  Open a pair's page with <code style="color:#e7eaf0">resume-polisher --serve-report &lt;payload&gt;</code>
+  Open a pair's page with <code style="color:#e7eaf0">uv run resume-polisher --serve-report &lt;payload&gt;</code>
   — every row wrote one.</p>
 <table>
 <thead><tr>

@@ -225,3 +225,27 @@ def test_main_purge(tmp_path: Path) -> None:
     d.mkdir()
     main(["--purge", str(d)])
     assert not d.exists()
+
+
+# ── Packaging ─────────────────────────────────────────────────────────────────
+
+
+def test_the_console_script_is_actually_packaged() -> None:
+    """`[project.scripts]` without a build system is skipped by uv, with only a warning.
+
+    That warning was easy to miss, and the README and the batch index both tell a person to
+    run `resume-polisher`. Assert the declaration and the build configuration together, since
+    the failure is the combination rather than either half.
+    """
+    import tomllib
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    data = tomllib.loads(pyproject.read_text())
+
+    assert data["project"]["scripts"]["resume-polisher"] == "polisher.cli:main"
+    assert "build-system" in data, (
+        "without a build system the project is virtual and uv skips the entry point"
+    )
+    backend = data["tool"]["uv"]["build-backend"]
+    assert backend["module-name"] == "polisher", "the module is not named after the dist"
+    assert backend["module-root"] == "", "the module is at the repository root, not under src/"

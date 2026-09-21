@@ -132,6 +132,9 @@ uv run main.py
 uv run main.py path/to/resume.txt path/to/job_description.txt --out polished_resume.txt
 ```
 
+The same entry point is installed as `resume-polisher`, so every flag below works as
+`uv run resume-polisher …`; `uv tool install .` puts it on your PATH.
+
 The defaults are the files in `example/` (``resume.txt``, ``job_description.txt``,
 ``polished_resume.txt``); replace them with your own, or pass paths.
 
