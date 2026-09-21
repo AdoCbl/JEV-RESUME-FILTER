@@ -85,7 +85,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-serve", dest="serve", action="store_false", help="skip the report page")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--resume", type=Path, default=None, metavar="RUN_DIR", help="resume from runs/<run-id>")
+    parser.add_argument(
+        "--resume",
+        dest="run_dir",
+        type=Path,
+        default=None,
+        metavar="RUN_DIR",
+        help="resume an interrupted run from its runs/<run-id> directory",
+    )
     parser.add_argument("--redact", action="store_true", help="strip PII before sending to APIs")
     parser.add_argument("--no-store", action="store_true", help="keep everything in memory, write nothing to disk")
     parser.add_argument("--purge", type=Path, default=None, metavar="RUN_DIR", help="delete a run directory")
@@ -170,9 +177,10 @@ def _run_one(
     prior_rounds: list[Round] | None = None,
     human_rejections=None,  # Callable[[], list[str]] | None
     reviewer=None,  # TypeSafeClient | None — shared with server for /api/check
+    store_dir: Path | None = None,  # a resumed run writes back into its own directory
 ) -> dict:
     """Run the polish loop for one (resume, job_description) pair and return the payload."""
-    directory = run_dir(run_id) if store else None
+    directory = (store_dir or run_dir(run_id)) if store else None
     if directory is not None:
         mf = report_module.build_manifest(settings, run_id=run_id)
         write_manifest(directory, mf)
@@ -472,13 +480,22 @@ def main(argv: list[str] | None = None) -> None:
         resume = redact_text(resume)
         job_description = redact_text(job_description)
 
-    # Resume from a prior run directory
+    # Resume: the flag names a run directory, which is not the resume file above. Sharing the
+    # two under one name made the default run treat its input as a run directory, and made
+    # --resume silently do nothing.
     prior_rounds: list[Round] | None = None
-    if args.resume is not None:
-        prior_rounds = load_rounds(args.resume)
-        print(f"  Resuming from {args.resume} ({len(prior_rounds)} completed rounds)")
+    store_dir: Path | None = None
+    if args.run_dir is not None:
+        prior_rounds = load_rounds(args.run_dir)
+        store_dir = args.run_dir
+        print(
+            f"  Resuming {args.run_dir.name} "
+            f"({len(prior_rounds)} completed round{'' if len(prior_rounds) == 1 else 's'})"
+        )
 
-    run_id = new_run_id()
+    # A resumed run keeps the directory it came from, so the rounds stay in one place and
+    # --purge <that directory> still removes the whole run.
+    run_id = store_dir.name if store_dir is not None else new_run_id()
 
     console.print_header(
         settings=settings,
@@ -526,6 +543,7 @@ def main(argv: list[str] | None = None) -> None:
         url=url,
         report_json=args.report_json,
         prior_rounds=prior_rounds,
+        store_dir=store_dir,
         human_rejections=(
             lambda: [ln for ln, v in state.decisions().items() if v == "rejected"]
         ) if state is not None else None,

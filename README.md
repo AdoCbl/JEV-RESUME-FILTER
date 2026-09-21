@@ -153,7 +153,7 @@ support, and the biggest gap. The run ends with the winning round and a token/la
 | `--max-tokens N` | stop the loop once the run has spent N tokens |
 | `--max-seconds N` | stop the loop after N seconds |
 | `--secrets PATH` | a different secrets file |
-| `--resume RUN_DIR` | continue from the last complete round in `runs/<id>/` |
+| `--resume RUN_DIR` | continue an interrupted run, adding to that run's own directory |
 | `--batch PAIRS_CSV` | run many pairs concurrently (see below) |
 | `--redact` | strip contact details before anything is sent to an API |
 | `--no-store` | keep everything in memory and write nothing to disk |
@@ -173,7 +173,8 @@ flight:
 | `audit.jsonl` | append-only log of every human approve/reject, with the reviewer and timestamp |
 
 `runs/` is git-ignored on purpose: a round file contains a real resume. Continue an
-interrupted run with `--resume runs/<run-id>`, and delete one with `--purge runs/<run-id>`.
+interrupted run with `--resume runs/<run-id>`: the new rounds are written back into that same
+directory, so one run stays in one place and `--purge runs/<run-id>` removes all of it.
 
 ### What a run leaves you
 

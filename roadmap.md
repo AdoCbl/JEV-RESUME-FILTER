@@ -7,7 +7,7 @@ dimensions, guards three fabrication checks, and audits the draft line by line �
 claim by claim inside each line. Code keeps the best draft and stops when a round stops
 paying. Round files, resumability, budgets, a versioned manifest, a live report page with
 per-round diffs, a human sign-off gate with an append-only audit log, privacy flags, and
-batch mode are all in place, with `ruff` clean and 137 tests passing on a checkout with no
+batch mode are all in place, with `ruff` clean and 142 tests passing on a checkout with no
 API keys (88% coverage on `polisher/`, including fifteen Playwright tests that load the
 page in a browser and click it — and CI now installs Chromium, so they run there instead of
 skipping quietly).
@@ -38,6 +38,15 @@ exist. The project is packaged now (`uv_build`, module at the repository root, n
 `polisher`), CI builds the wheel and runs `resume-polisher --help` from it in an empty venv,
 and a test asserts the declaration and the build configuration together — the failure was the
 combination, not either half.
+
+**The default command runs, and `--resume` does something.** The flag and the resume-file
+positional were registered under one name, so argparse handed the flag's default to the
+positional: `uv run main.py` read its input as a run directory and exited with *no saved rounds
+found in example/resume.txt*, and `--resume` was silently ignored. No test caught it because
+every CLI test either returned early (`--purge`, `--serve-report`, `--batch`) or called the loop
+directly; nothing ran the command the README opens with. The flag has its own name, a resumed
+run now continues in the directory it came from rather than opening a second one beside it, and
+three tests cover the default path, the flag, and the round trip.
 
 **Docs match the code.** `--out` was missing from the flag table, the page's lack of auth was
 undocumented (`--host 0.0.0.0` exposes a resume, now stated in the README), and

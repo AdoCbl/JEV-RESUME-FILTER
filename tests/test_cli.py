@@ -227,8 +227,112 @@ def test_main_purge(tmp_path: Path) -> None:
     assert not d.exists()
 
 
-# ── Packaging ─────────────────────────────────────────────────────────────────
+# ── The default run, and resuming one ─────────────────────────────────────────
 
+
+def _inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
+    resume = tmp_path / "resume.txt"
+    resume.write_text("Jane Smith\nBuilt the API.")
+    jd = tmp_path / "jd.txt"
+    jd.write_text("Backend engineer.")
+    return resume, jd, tmp_path / "out.txt"
+
+
+def test_a_plain_run_writes_the_output(tmp_path: Path, monkeypatch, capsys) -> None:
+    """`uv run main.py` is the command in the README, and nothing tested it.
+
+    The `--resume` flag shared a destination with the resume-file positional, so the default
+    run read its input as a run directory and exited: "no saved rounds found in
+    example/resume.txt".
+    """
+    from polisher.cli import main
+    from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
+
+    monkeypatch.setattr("polisher.runs.RUNS_DIR", tmp_path / "runs")
+    resume, jd, out = _inputs(tmp_path)
+
+    with (
+        patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
+        patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
+    ):
+        main(
+            [str(resume), str(jd), "--out", str(out), "--no-serve",
+             "--secrets", str(_write_secrets(tmp_path))]
+        )
+
+    assert out.exists()
+    assert "Jane Smith" in out.read_text()
+    assert "no saved rounds" not in capsys.readouterr().out
+
+
+def test_the_resume_flag_is_not_the_resume_file() -> None:
+    from polisher.cli import build_parser
+
+    parser = build_parser()
+    assert parser.parse_args([]).run_dir is None
+    assert parser.parse_args([]).resume == Path("example/resume.txt")
+
+    both = parser.parse_args(["mine.txt", "jd.txt", "--resume", "runs/abc"])
+    assert both.resume == Path("mine.txt"), "the positional is still the resume file"
+    assert both.run_dir == Path("runs/abc"), "and the flag is the run directory"
+
+
+def test_resume_continues_in_the_same_directory(tmp_path: Path, monkeypatch, capsys) -> None:
+    """A resumed run adds to the run it came from, so one directory still holds the run."""
+    from polisher.cli import main
+    from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
+
+    runs = tmp_path / "runs"
+    monkeypatch.setattr("polisher.runs.RUNS_DIR", runs)
+    resume, jd, out = _inputs(tmp_path)
+    secrets = _write_secrets(tmp_path)
+    argv = [str(resume), str(jd), "--out", str(out), "--no-serve", "--secrets", str(secrets)]
+
+    with (
+        patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
+        patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
+    ):
+        main([*argv, "--max-iterations", "1"])
+
+    first = next(iter(runs.iterdir()))
+    assert [p.name for p in sorted(first.iterdir())] == ["manifest.json", "round-01.json"]
+
+    with (
+        patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
+        patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
+    ):
+        main([*argv, "--max-iterations", "2", "--resume", str(first)])
+
+    assert f"Resuming {first.name} (1 completed round)" in capsys.readouterr().out
+    assert sorted(p.name for p in first.iterdir()) == [
+        "manifest.json", "round-01.json", "round-02.json",
+    ]
+    assert list(runs.iterdir()) == [first], "no second directory for the same run"
+
+
+def test_resume_without_saved_rounds_says_which_directory(tmp_path: Path, monkeypatch) -> None:
+    import pytest as _pytest
+
+    from polisher.cli import main
+    from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
+
+    monkeypatch.setattr("polisher.runs.RUNS_DIR", tmp_path / "runs")
+    resume, jd, out = _inputs(tmp_path)
+    empty = tmp_path / "empty-run"
+    empty.mkdir()
+
+    with (
+        patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
+        patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
+        _pytest.raises(SystemExit, match="no saved rounds"),
+    ):
+        main(
+            [str(resume), str(jd), "--out", str(out), "--no-serve",
+             "--secrets", str(_write_secrets(tmp_path)), "--resume", str(empty)]
+        )
+
+
+# ── Packaging ─────────────────────────────────────────────────────────────────
 
 def test_the_console_script_is_actually_packaged() -> None:
     """`[project.scripts]` without a build system is skipped by uv, with only a warning.
