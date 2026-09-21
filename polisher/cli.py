@@ -27,6 +27,10 @@ from .runs import ProviderError, load_rounds, new_run_id, run_dir, save_round, w
 EXAMPLE = Path("example")
 _log = logging.getLogger("polisher")
 
+# The attributes ``logging`` puts on every record. Anything else on a record was attached
+# by the caller through ``extra=`` and belongs in the JSON line.
+_STANDARD_RECORD_ATTRS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", (), None)))
+
 
 def _setup_logging(json_logs: bool) -> None:
     if json_logs:
@@ -39,13 +43,26 @@ def _setup_logging(json_logs: bool) -> None:
 
 
 class _JsonFormatter(logging.Formatter):
+    """One JSON object per line, carrying whatever the caller attached via ``extra``.
+
+    ``logging`` puts ``extra`` keys straight onto the record as attributes, so the fields
+    that make a run traceable (``run_id``, ``round``, provider ``kind``) arrive here even
+    though ``record.extra`` itself never exists.
+    """
+
     def format(self, record: logging.LogRecord) -> str:
         data = {
             "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
             "level": record.levelname,
             "msg": record.getMessage(),
         }
-        data.update(getattr(record, "extra", {}))
+        data.update(
+            {
+                key: value
+                for key, value in record.__dict__.items()
+                if key not in _STANDARD_RECORD_ATTRS
+            }
+        )
         return json.dumps(data)
 
 
@@ -147,11 +164,12 @@ def _run_one(
     out: Path,
     run_id: str,
     store: bool,
-    audit_log: AuditLog,
     state: server.ReportState | None,
     url: str | None,
     report_json: Path | None,
     prior_rounds: list[Round] | None = None,
+    human_rejections=None,  # Callable[[], list[str]] | None
+    reviewer=None,  # TypeSafeClient | None — shared with server for /api/check
 ) -> dict:
     """Run the polish loop for one (resume, job_description) pair and return the payload."""
     directory = run_dir(run_id) if store else None
@@ -206,7 +224,12 @@ def _run_one(
                                    "overall": round(current.review.overall, 4)})
 
     try:
-        run = polish(settings, resume, job_description, on_round=on_round, prior_rounds=prior_rounds)
+        run = polish(
+            settings, resume, job_description,
+            on_round=on_round, prior_rounds=prior_rounds,
+            human_rejections=human_rejections,
+            reviewer=reviewer,
+        )
     except (TypeSafeAPIError, OpenAIError) as exc:
         provider_err = (
             ProviderError.from_typesafe(exc)
@@ -243,6 +266,89 @@ def _run_one(
     return payload
 
 
+def _write_batch_index(results: list[dict], path: Path) -> None:
+    """Write a decision-queue HTML index over a completed batch.
+
+    Sorted so pairs with unresolved flagged lines or fabrication risk come first —
+    those are the ones that need a reviewer's attention.
+    """
+    import html as _html
+
+    def _priority(r: dict) -> tuple:
+        payload = r.get("payload", {})
+        best = next(
+            (v for v in payload.get("versions", []) if v.get("index") == payload.get("best_index")),
+            None,
+        )
+        review = best.get("review") if best else None
+        flagged = len(review.get("flagged_lines", [])) if review else 0
+        risk = review.get("fabrication_risk", 0) if review else 0
+        overall = review.get("overall", 0) if review else 0
+        return (-flagged, -risk, overall)
+
+    sorted_results = sorted(results, key=_priority)
+
+    rows = []
+    for r in sorted_results:
+        payload = r.get("payload", {})
+        best = next(
+            (v for v in payload.get("versions", []) if v.get("index") == payload.get("best_index")),
+            None,
+        )
+        review = best.get("review") if best else None
+        overall = f"{review['overall']:.2f}" if review else "—"
+        flagged = len(review.get("flagged_lines", [])) if review else "—"
+        risk = f"{review.get('fabrication_risk', 0):.2f}" if review else "—"
+        weakest_dim = review.get("weakest_dimension", "—") if review else "—"
+        status = r.get("status", "?")
+        out = _html.escape(r.get("out", ""))
+        report_link = ""
+        report_json = r.get("report_json", "")
+        if report_json:
+            report_link = (
+                f' <a href="{_html.escape(report_json)}" style="color:#c264ff">'
+                f'payload →</a>'
+            )
+        row_color = "#ff6b6b" if status != "ok" else ("#ffc857" if isinstance(flagged, int) and flagged > 0 else "")
+        rows.append(
+            f'<tr style="border-bottom:1px solid #272d39">'
+            f'<td style="padding:8px 12px;color:{row_color or "#e7eaf0"}">{out}</td>'
+            f'<td style="padding:8px 12px;text-align:right">{overall}</td>'
+            f'<td style="padding:8px 12px;text-align:right;color:{"#ff6b6b" if isinstance(flagged,int) and flagged else "#e7eaf0"}">{flagged}</td>'
+            f'<td style="padding:8px 12px;text-align:right">{risk}</td>'
+            f'<td style="padding:8px 12px;color:#98a1b1">{_html.escape(str(weakest_dim))}</td>'
+            f'<td style="padding:8px 12px">{status}{report_link}</td>'
+            f'</tr>'
+        )
+
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Batch index — {_html.escape(path.stem)}</title>
+<style>
+body{{margin:0;background:#0e1014;color:#e7eaf0;font:14px/1.55 ui-sans-serif,system-ui,sans-serif}}
+h1{{padding:20px;margin:0;font-size:16px}}
+table{{width:100%;border-collapse:collapse}}
+th{{background:#161a21;padding:8px 12px;text-align:left;font-size:11px;letter-spacing:.08em;
+    text-transform:uppercase;color:#98a1b1}}
+tr:hover{{background:rgba(255,255,255,.03)}}
+</style></head><body>
+<h1>Batch: {_html.escape(path.stem)} &nbsp;<span style="color:#98a1b1;font-weight:normal">
+  sorted by unresolved flagged lines, then fabrication risk.</span></h1>
+<p style="margin:0 20px 14px;color:#98a1b1;font-size:13px">
+  Open a pair's page with <code style="color:#e7eaf0">resume-polisher --serve-report &lt;payload&gt;</code>
+  — every row wrote one.</p>
+<table>
+<thead><tr>
+  <th>output</th><th>overall</th><th>flagged</th><th>fab risk</th>
+  <th>weakest dim</th><th>status</th>
+</tr></thead>
+<tbody>{''.join(rows)}</tbody>
+</table>
+</body></html>
+"""
+    path.write_text(html)
+
+
 def run_batch(args: argparse.Namespace, settings: config.Settings) -> None:
     """Process many (resume, job_description) pairs from a CSV file concurrently."""
     import concurrent.futures
@@ -262,13 +368,16 @@ def run_batch(args: argparse.Namespace, settings: config.Settings) -> None:
 
     def process(row: dict) -> None:
         run_id = new_run_id()
-        resume_text = config.read_input(Path(row["resume"]))
-        jd_text = config.read_input(Path(row["job_description"]))
-        out = Path(row["out"])
-        if settings.redact:
-            resume_text = redact_text(resume_text)
-            jd_text = redact_text(jd_text)
         try:
+            resume_text = config.read_input(Path(row["resume"]))
+            jd_text = config.read_input(Path(row["job_description"]))
+            out = Path(row["out"])
+            # The index links to each pair's payload, so the pair has to write one:
+            # serve it with `--serve-report <file>` to open that pair's page.
+            report_path = Path(row.get("report_json") or out.with_name(out.stem + "_report.json"))
+            if settings.redact:
+                resume_text = redact_text(resume_text)
+                jd_text = redact_text(jd_text)
             payload = _run_one(
                 settings=settings,
                 resume=resume_text,
@@ -276,18 +385,29 @@ def run_batch(args: argparse.Namespace, settings: config.Settings) -> None:
                 out=out,
                 run_id=run_id,
                 store=not settings.no_store,
-                audit_log=AuditLog(None),
                 state=None,
                 url=None,
-                report_json=None,
+                report_json=None if settings.no_store else report_path,
             )
+        except (SystemExit, Exception) as exc:  # noqa: BLE001 - one bad pair must not kill the batch
             with lock:
-                results.append({"run_id": run_id, "out": str(out), "status": "ok",
-                                 "best": payload.get("best_index")})
-        except SystemExit as exc:
-            with lock:
-                failures.append(f"{row['resume']}: {exc}")
-                results.append({"run_id": run_id, "out": str(out), "status": "failed", "error": str(exc)})
+                failures.append(f"{row.get('resume', '?')}: {exc}")
+                results.append({
+                    "run_id": run_id,
+                    "out": str(row.get("out", "")),
+                    "status": "failed",
+                    "error": str(exc),
+                })
+            return
+        with lock:
+            results.append({
+                "run_id": run_id,
+                "out": str(out),
+                "status": "ok",
+                "best": payload.get("best_index"),
+                "payload": payload,
+                "report_json": "" if settings.no_store else str(report_path),
+            })
 
     max_workers = min(4, len(rows))
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -301,7 +421,14 @@ def run_batch(args: argparse.Namespace, settings: config.Settings) -> None:
         print(f"\n{len(failures)} failed:")
         for f in failures:
             print(f"  {f}")
-        sys.exit(1)
+
+    # Write a decision-queue index page sorted by what needs attention first
+    index_path = args.batch.with_suffix(".index.html")
+    _write_batch_index(results, index_path)
+    print(f"\n  Batch index: {index_path}")
+
+    if failures:
+        sys.exit(min(len(failures), 125))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -369,17 +496,24 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.serve:
         state = server.ReportState(output_path=args.out)
+        state.original_resume = resume
         state.on_review = lambda line, verdict: audit_log.record(
             run_id=run_id, line=line, verdict=verdict
         )
+        from typesafe_sdk import TypeSafeClient as _TSC
+        shared_reviewer = _TSC(**settings.typesafe_client_kwargs())
+        state.reviewer = shared_reviewer
         try:
             httpd = server.start(state, host=args.host, port=args.port)
         except OSError as error:
             state = None
+            shared_reviewer = None
             console.print_server_unavailable(args.port, error.strerror or str(error))
         else:
             url = server.url(httpd, args.host)
             console.print_server(url)
+    else:
+        shared_reviewer = None
 
     _run_one(
         settings=settings,
@@ -388,11 +522,14 @@ def main(argv: list[str] | None = None) -> None:
         out=args.out,
         run_id=run_id,
         store=not settings.no_store,
-        audit_log=audit_log,
         state=state,
         url=url,
         report_json=args.report_json,
         prior_rounds=prior_rounds,
+        human_rejections=(
+            lambda: [ln for ln, v in state.decisions().items() if v == "rejected"]
+        ) if state is not None else None,
+        reviewer=shared_reviewer,
     )
 
     if state is not None:

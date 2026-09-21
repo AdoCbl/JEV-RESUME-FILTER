@@ -8,6 +8,13 @@ resume; ordinary code owns the loop, the scoring, and the stop decision.
 resume.txt + job_description.txt  ->  polished_resume.txt
 ```
 
+![The report page: the winning round diffed against the original, with the source-line
+evidence open, the five dimension scores, the claim ledger, the job-description coverage
+matrix, and the run's cost and trust strip](docs/report-page.png)
+
+*Every run serves this page. Here the diff links a bullet to the original line that supports
+it, and says plainly when nothing does — which is the reason to believe the score.*
+
 ## How a round works
 
 ```mermaid
@@ -127,11 +134,74 @@ support, and the biggest gap. The run ends with the winning round and a token/la
 | Flag | What it does |
 |---|---|
 | `--port N` | port for the report page (default `8765`) |
+| `--host H` | bind address (default `127.0.0.1`) |
 | `--no-serve` | skip the page and just run the loop |
 | `--report-json PATH` | write the run payload for later, or for another tool |
 | `--serve-report PATH` | skip the run and serve a payload written earlier |
 | `--max-iterations N` | override the round ceiling |
+| `--max-tokens N` | stop the loop once the run has spent N tokens |
+| `--max-seconds N` | stop the loop after N seconds |
 | `--secrets PATH` | a different secrets file |
+| `--resume RUN_DIR` | continue from the last complete round in `runs/<id>/` |
+| `--batch PAIRS_CSV` | run many pairs concurrently (see below) |
+| `--redact` | strip contact details before anything is sent to an API |
+| `--no-store` | keep everything in memory and write nothing to disk |
+| `--purge RUN_DIR` | delete a run directory and everything in it |
+| `--diff-runs A B` | compare two run payloads dimension by dimension |
+| `--log-json` | structured JSON logs, one object per line |
+
+### Run artifacts
+
+Every run writes `runs/<run-id>/`, so a crash or a `Ctrl-C` costs at most the round in
+flight:
+
+| File | What it holds |
+|---|---|
+| `manifest.json` | the version fingerprint: git commit, rubric hash, models, weights, thresholds |
+| `round-<n>.json` | that round's draft, the reviewer's verdicts, and the per-call costs |
+| `audit.jsonl` | append-only log of every human approve/reject, with the reviewer and timestamp |
+
+`runs/` is git-ignored on purpose: a round file contains a real resume. Continue an
+interrupted run with `--resume runs/<run-id>`, and delete one with `--purge runs/<run-id>`.
+
+### What a run leaves you
+
+- `polished_resume.txt` — the best draft of the rounds that ran, never the last one.
+- `UNRESOLVED.md` — written instead of a clean artifact whenever the winning draft still has
+  lines the reviewer could not ground. Each one needs an approve/reject decision on the page
+  before the resume is sent anywhere.
+
+### Batch mode
+
+`--batch pairs.csv` takes one row per application:
+
+```csv
+resume,job_description,out
+resumes/jane.txt,jobs/backend.txt,out/jane-backend.txt
+```
+
+Pairs run concurrently (four at a time) and each gets its own `runs/<id>/`. One broken pair
+is reported and skipped rather than aborting the batch, and the exit code is the number of
+pairs that failed.
+
+Each pair also writes its payload next to its output (`<out>_report.json`) — open one with
+`--serve-report` — and the batch writes `<pairs>.index.html`, a decision queue sorted so
+pairs with unresolved flagged lines or fabrication risk come first. With `--no-store`
+neither is written.
+
+### Privacy
+
+A resume is personal data and it is sent to two third parties. `docs/data-flow.md` lists
+exactly what leaves the machine and to whom. `--redact` strips email, phone, address, and
+links before any request; `--no-store` writes nothing to disk at all.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | the run finished (the loop stopping early is normal, not a failure) |
+| 1 | a provider failure — the message names the class (auth, rate limit, timeout, …) |
+| N | `--batch`: N pairs failed |
 
 `example/resume.txt` and `example/job_description.txt` are **sample inputs**, and
 `example/polished_resume.txt` is a sample of what a run produces; replace them with your
@@ -150,6 +220,24 @@ the same. The page follows the newest round until you navigate.
 - **JEV scores** — the five dimensions with the delta against the previous version, the
 reviewer's confidence, the three fabrication checks, line grounding, the weakest line, the
 biggest gap, and any lines the reviewer could not support.
+- **Grounding ledger** — every audited line with the probability it is grounded, the atomic
+claims inside it, and the uncertain band (0.5–0.8) shown as its own state between supported
+and unsupported. Filter to *needs attention*, *uncertain*, or *unsupported*; the claims
+behind a line are the reason a verdict exists, so they are shown rather than summarised.
+- **Requirements answered** — the job description's requirements against the draft lines
+that answer them, with the gaps left visibly empty. An uncovered requirement is an
+instruction to leave it out, not to invent it.
+- **Run totals** — tokens and seconds by writer and reviewer, the reviewer's share of the
+bill, the budget meter when `--max-tokens` or `--max-seconds` is set, cost per round, and
+what to trust in the winning draft: how many lines were carried rather than re-asked, how
+many sit in the uncertain band, and how many need a person.
+- **Edit** — edit the selected draft in place (`e`). A debounced change asks JEV about the
+lines that changed and nothing else, and the verdict appears in the gutter: green grounded,
+amber uncertain, red unsupported, with the failing claim on hover. **Save edited draft**
+writes the edit to the output file, but only once its own check came back clean — the same
+gate the loop's drafts pass, so a hand-edit that still invents a figure cannot ship.
+- **Approve / reject** — every flagged line carries a verdict that is appended to
+`audit.jsonl` and fed back to the writer, so a phrasing a person rejected cannot return.
 - **Save this version** — writes the selected version to the output file, which is how you
 keep a round the loop did not pick. The button is disabled while the run is live, because
 the loop owns that file and rewrites it whenever a round becomes the new best.
@@ -165,14 +253,15 @@ example/            sample inputs and a sample output; replace with your own
 polisher/
   config.py         secrets.toml, the loop's knobs, the input files
   writer.py         DeepSeek: the system prompt, prompt assembly, draft cleanup
-  judge.py          JEV: dimensions, weights, guardrails, per-line audit, composite score
+  judge.py          JEV: dimensions, weights, guardrails, per-line and per-claim audit,
+                    source-line and requirement choices, composite score, live edit audit
   loop.py           writer -> judge -> keep the best -> repeat; the stop rules
   metrics.py        per-call latency and token records
   diff.py           line diffs between versions, for both views
   report.py         the single run payload every view reads
   console.py        the terminal view
-  page.py           the HTML view
-  server.py         the local server: the page, the payload, and saving a version
+  page.py           the HTML view: scores, ledger, coverage, diffs, and the edit surface
+  server.py         the local server: the page, the payload, decisions, saving, live checks
   cli.py            argument parsing and the wiring between all of the above
 ```
 

@@ -8,8 +8,9 @@ Endpoints:
   GET  /           — the report page
   GET  /api/report — the run payload (JSON)
   GET  /healthz    — liveness check
-  POST /api/save   — write a chosen version to the output file (CSRF-protected)
+  POST /api/save   — write a chosen version, or a hand-edited draft, to the output file
   POST /api/review — record a human approve/reject decision on a flagged line
+  POST /api/check  — ground the lines of an edited draft, asking only what changed
 """
 
 import json
@@ -35,30 +36,48 @@ class ReportState:
     csrf_token: str = field(default_factory=lambda: secrets.token_hex(32))
     # Audit log callback: (line, verdict) -> None; set by cli.py when --no-store is off
     on_review: Any = None  # Callable[[str, str], None] | None
+    # Context for /api/check: set by cli.py after the loop starts
+    original_resume: str | None = None
+    reviewer: Any = None  # TypeSafeClient | None
     _report: dict[str, Any] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     # Approved/rejected decisions keyed by line text
     _decisions: dict[str, str] = field(default_factory=dict)
+    # The most recent live check: the edited text and the lines it could not ground
+    _checked_text: str | None = None
+    _checked_unsupported: list[str] = field(default_factory=list)
 
     def set_report(self, report: dict[str, Any]) -> None:
         with self._lock:
             self._report = report
+            # A round's payload replaces the previous one, so re-apply the verdicts already
+            # recorded: an approval must not disappear from the page because a round landed.
+            self._apply_decisions()
 
     def get_report(self) -> dict[str, Any]:
         with self._lock:
             return self._report
 
+    def _apply_decisions(self) -> None:
+        """Write the recorded verdicts into the payload so the page reflects them.
+
+        The caller holds ``_lock``.
+        """
+        if not self._decisions:
+            return
+        for version in self._report.get("versions", []):
+            review = version.get("review")
+            if review is None:
+                continue
+            for entry in review.get("lines_to_review", []):
+                verdict = self._decisions.get(entry["text"])
+                if verdict is not None:
+                    entry["decision"] = verdict
+
     def record_decision(self, line: str, verdict: str) -> None:
         with self._lock:
             self._decisions[line] = verdict
-            # Propagate decisions into the report so the page reflects them.
-            for version in self._report.get("versions", []):
-                review = version.get("review")
-                if review is None:
-                    continue
-                for entry in review.get("lines_to_review", []):
-                    if entry["text"] == line:
-                        entry["decision"] = verdict
+            self._apply_decisions()
 
     def decisions(self) -> dict[str, str]:
         with self._lock:
@@ -90,6 +109,31 @@ class ReportState:
         with self._lock:
             for version in self._report.get("versions", []):
                 version["saved"] = version.get("index") == index
+        return self.output_path
+
+    def record_check(self, text: str, unsupported: list[str]) -> None:
+        with self._lock:
+            self._checked_text = text
+            self._checked_unsupported = list(unsupported)
+
+    def save_edit(self, text: str) -> Path:
+        """Write a hand-edited draft — but only once its own check came back clean.
+
+        The gate is the same one the loop's drafts pass: a hand-edit that still has a line
+        the reviewer cannot ground does not reach the output file. Requiring the check to
+        have run also means the gate is decided by the reviewer's judgment on this exact
+        text, not by the page asserting that it looks fine.
+        """
+        with self._lock:
+            if self._checked_text != text:
+                raise ValueError("check this edit before saving it")
+            unsupported = list(self._checked_unsupported)
+        if unsupported:
+            shown = "; ".join(line[:60] for line in unsupported[:3])
+            raise ValueError(
+                f"{len(unsupported)} line(s) still cannot be grounded: {shown}"
+            )
+        self.output_path.write_text(text + "\n")
         return self.output_path
 
 
@@ -140,11 +184,14 @@ def _handler(state: ReportState) -> type[BaseHTTPRequestHandler]:
 
             if self.path == "/api/save":
                 try:
-                    saved = state.save_version(int(body["index"]))
+                    if "text" in body:
+                        saved = state.save_edit(str(body["text"]))
+                    else:
+                        saved = state.save_version(int(body["index"]))
                 except (KeyError, TypeError, ValueError) as exc:
                     self._json(400, {"error": str(exc)})
                     return
-                self._json(200, {"saved": str(saved), "index": body["index"]})
+                self._json(200, {"saved": str(saved), "index": body.get("index")})
 
             elif self.path == "/api/review":
                 line = body.get("line", "")
@@ -156,6 +203,45 @@ def _handler(state: ReportState) -> type[BaseHTTPRequestHandler]:
                 if state.on_review is not None:
                     state.on_review(line, verdict)
                 self._json(200, {"line": line, "verdict": verdict})
+
+            elif self.path == "/api/check":
+                if state.reviewer is None or not state.original_resume:
+                    self._json(503, {"error": "live checking not available for this run"})
+                    return
+                draft_text = body.get("text", "")
+                if not draft_text:
+                    self._json(400, {"error": "text required"})
+                    return
+                try:
+                    from .judge import audit_lines
+
+                    carried = body.get("carried") or None
+                    audited = audit_lines(
+                        state.reviewer,
+                        original_resume=state.original_resume,
+                        draft=draft_text,
+                        carried=carried,
+                    )
+                except Exception as exc:  # noqa: BLE001 — report the provider message to the page
+                    self._json(500, {"error": str(exc)})
+                    return
+                unsupported = [line.text for line in audited if line.unsupported]
+                state.record_check(draft_text, unsupported)
+                self._json(200, {
+                    "lines": [
+                        {
+                            "text": line.text,
+                            "support": round(line.support, 3),
+                            "unsupported": line.unsupported,
+                            "failing_claim": line.failing_claim,
+                            "claims": [
+                                {"text": t, "support": round(s, 3)} for t, s in line.claims
+                            ],
+                        }
+                        for line in audited
+                    ],
+                    "unsupported": unsupported,
+                })
 
             else:
                 self._json(404, {"error": f"no route {self.path}"})

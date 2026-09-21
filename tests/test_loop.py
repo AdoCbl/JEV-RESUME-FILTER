@@ -122,3 +122,72 @@ def test_resume_from_prior_rounds() -> None:
         result = polish(s, RESUME, JD, prior_rounds=list(first.rounds))
     assert result.rounds[0].number == 1
     assert len(result.rounds) <= 2
+
+
+# ── Steering: a person's rejection reaches the writer ────────────────────────
+
+REJECTED = "Architected a platform serving 10M users"
+
+
+def test_a_human_rejection_is_handed_to_the_writer_every_round() -> None:
+    """A phrasing a person refused must not be able to come back in a later round."""
+    import polisher.loop as loop
+
+    seen: list[str | None] = []
+    real_write = loop.write_draft
+
+    def spy(writer, **kwargs):
+        seen.append(kwargs.get("rejected"))
+        return real_write(writer, **kwargs)
+
+    s = _settings(max_iterations=3)
+    with (
+        patch.object(loop, "write_draft", spy),
+        patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
+        patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
+    ):
+        loop.polish(
+            s,
+            RESUME,
+            JD,
+            human_rejections=lambda: [REJECTED],
+            reviewer=FakeTypeSafeClient(),
+        )
+
+    assert len(seen) >= 2, "the loop must have written more than one round"
+    for block in seen:
+        assert block is not None
+        assert REJECTED in block
+        assert "rejected by a human" in block
+
+
+def test_human_rejections_lead_the_rejected_phrasings_block() -> None:
+    """A person's refusal outranks JEV's, and a line rejected by both is listed once."""
+
+    class _Line:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _Review:
+        def __init__(self, lines, overall: float = 0.1) -> None:
+            self._lines = lines
+            self.overall = overall
+
+        def lines_to_review(self):
+            return tuple(self._lines)
+
+    class _Round:
+        def __init__(self, number: int, review) -> None:
+            self.number = number
+            self.review = review
+
+    losing = _Round(1, _Review([_Line("JEV flagged this"), _Line(REJECTED)]))
+    best = _Round(2, _Review([], overall=0.9))
+
+    block = rejected_phrasings([losing, best], best, extra=[REJECTED])
+    assert block is not None
+    bullets = [line.strip() for line in block.splitlines() if line.strip().startswith("- ")]
+    assert bullets[0] == f"- {REJECTED}", "the human rejection leads"
+    assert bullets.count(f"- {REJECTED}") == 1, "and is not repeated as a JEV line"
+    assert "- JEV flagged this" in bullets
+    assert "rejected by a human" in block

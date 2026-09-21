@@ -22,9 +22,10 @@ Two details keep the loop honest and cheap:
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import fsum
 from statistics import fmean
+from typing import Any
 
 from typesafe_sdk import Choice, Noul, NoulCriteria, Score, TypeSafeClient
 
@@ -41,6 +42,7 @@ GAP_MARGIN = 0.15  # a leading gap below this margin is reported as a split, not
 FABRICATION_BLOCK = 0.5  # at or above this the draft must be fixed before anything else
 MIN_CLAIM_CHARS = 12  # shorter lines are headings or contact details, not claims
 MAX_AUDIT_LINES = 60  # cap on the per-line grounding questions in one round
+MAX_REQUIREMENTS = 20  # cap on JD requirements extracted for the coverage matrix
 
 # ── Quality dimensions ────────────────────────────────────────────────────────
 # One Score question per dimension, each measuring one thing. The weights are code,
@@ -216,6 +218,39 @@ CLAIM_CRITERIA = NoulCriteria(
     false="The claim asserts something the original resume does not state or imply.",
 )
 
+# ── Source-line evidence ───────────────────────────────────────────────────────
+# For each draft line, one Choice identifies which original line is its source.
+# Code finds candidates by word overlap; the judgment picks, copies verbatim text.
+
+_SKIP_WORDS = frozenset({
+    "the", "and", "for", "with", "that", "this", "from", "was", "are", "have",
+    "been", "their", "its", "will", "can", "also", "more", "into", "than", "has",
+})
+
+
+def source_question_id(index: int) -> str:
+    """Answer id for the source-line evidence question about draft line ``index``."""
+    return f"src_{index:02d}"
+
+
+def _candidate_sources(
+    draft_line: str, original_lines: tuple[str, ...], max_n: int = 12
+) -> tuple[str, ...]:
+    """Return at most max_n original lines ranked by significant-word overlap with draft_line."""
+    def sig_words(text: str) -> frozenset[str]:
+        return frozenset(
+            w.lower().rstrip(".,;:!?'\"")
+            for w in text.split()
+            if len(w) >= 4 and w.lower() not in _SKIP_WORDS
+        )
+
+    draft_words = sig_words(draft_line)
+    if not draft_words:
+        return original_lines[:max_n]
+    ranked = sorted(original_lines, key=lambda ln: -len(draft_words & sig_words(ln)))
+    with_overlap = tuple(ln for ln in ranked if draft_words & sig_words(ln))
+    return with_overlap[:max_n] if with_overlap else original_lines[:max_n]
+
 # Conjunctions that often separate independent factual claims within a bullet.
 _CLAIM_SPLIT_RE: re.Pattern[str] | None = None
 
@@ -251,26 +286,79 @@ def line_question_id(index: int) -> str:
     return f"line_{index:02d}"
 
 
-def build_questions(lines: tuple[str, ...] | list[str]) -> dict[str, Noul | Choice | Score]:
+def build_questions(
+    lines: tuple[str, ...] | list[str],
+    original_lines: tuple[str, ...] | None = None,
+    requirements: tuple[str, ...] | None = None,
+) -> dict[str, Noul | Choice | Score]:
     """All questions for one round, in a single request (they run in parallel).
 
     For lines with multiple atomic claims, we add a per-claim Noul in addition to the
     per-line Noul so that a fabricated clause inside an otherwise true bullet is caught.
+
+    When ``original_lines`` is provided, a ``Choice`` question is added for each line
+    to identify which original resume line is its primary source.
+
+    When ``requirements`` is provided, a ``Noul`` question is added for each JD
+    requirement to measure whether the draft addresses it.
     """
     questions: dict[str, Noul | Choice | Score] = {}
     questions.update(DIMENSIONS)
     questions.update(GUARDRAILS)
     questions["biggest_gap"] = BIGGEST_GAP
+    questions.update(line_questions(lines))
+    for index, line in enumerate(lines):
+        # Source-line evidence: which original line backs this draft line?
+        if original_lines:
+            candidates = _candidate_sources(line, original_lines)
+            if candidates:
+                criteria: dict[str, str] = {str(i): candidates[i] for i in range(len(candidates))}
+                criteria["none"] = (
+                    "No line in the original resume is the primary source for this claim."
+                )
+                questions[source_question_id(index)] = Choice(
+                    instructions={
+                        "draft_line": line,
+                        "question": (
+                            "Which line in the original resume is the primary source"
+                            " for this draft line?"
+                        ),
+                    },
+                    criteria=criteria,
+                )
+    # Coverage matrix: which draft line addresses each JD requirement?
+    if requirements and lines:
+        line_criteria: dict[str, str] = {str(i): line for i, line in enumerate(lines)}
+        line_criteria["none"] = "No line in the candidate resume addresses this requirement."
+        for req_idx, req in enumerate(requirements):
+            questions[coverage_question_id(req_idx)] = Choice(
+                instructions={
+                    "requirement": req,
+                    "question": (
+                        "Which line in `candidate_resume` best addresses this job requirement?"
+                    ),
+                },
+                criteria=line_criteria,
+            )
+    return questions
+
+
+def line_questions(lines: tuple[str, ...] | list[str]) -> dict[str, Noul]:
+    """One grounding ``Noul`` per line, plus one per atomic claim of a multi-claim line.
+
+    Indexed against ``lines`` itself, not the draft, so the same ids answer for a round
+    (over the lines that changed) and for the page's live lint (over the lines just edited).
+    """
+    questions: dict[str, Noul] = {}
     for index, line in enumerate(lines):
         questions[line_question_id(index)] = Noul(
             instructions={"candidate_line": line, "question": LINE_QUESTION},
             criteria=LINE_CRITERIA,
         )
-        # Per-claim questions for multi-claim lines
         claims = split_claims(line)
         if len(claims) > 1:
-            for ci, claim in enumerate(claims):
-                questions[claim_question_id(index, ci)] = Noul(
+            for claim_index, claim in enumerate(claims):
+                questions[claim_question_id(index, claim_index)] = Noul(
                     instructions={"candidate_line": claim, "question": CLAIM_QUESTION},
                     criteria=CLAIM_CRITERIA,
                 )
@@ -290,6 +378,28 @@ def claim_lines(resume: str, limit: int = MAX_AUDIT_LINES) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def split_requirements(jd: str, limit: int = MAX_REQUIREMENTS) -> tuple[str, ...]:
+    """Extract individual requirements from a job description.
+
+    Takes each non-blank, sufficiently-long line, strips list markers, and returns
+    the first ``limit`` as candidates for the coverage matrix.
+    """
+    reqs = []
+    for raw in jd.splitlines():
+        line = raw.strip().lstrip("-•*–—·1234567890.)").strip()
+        if len(line) < 20 or not any(c.isalpha() for c in line):
+            continue
+        reqs.append(line)
+        if len(reqs) == limit:
+            break
+    return tuple(reqs)
+
+
+def coverage_question_id(index: int) -> str:
+    """Answer id for the coverage question about JD requirement ``index``."""
+    return f"cov_{index:02d}"
+
+
 # ── The review ────────────────────────────────────────────────────────────────
 
 
@@ -301,6 +411,8 @@ class AuditedLine:
     support: float
     # The specific atomic claim that failed, when claim-level splitting was used
     failing_claim: str | None = None
+    # All atomic claims and their individual support probabilities (empty for carried lines)
+    claims: tuple[tuple[str, float], ...] = ()
 
     @property
     def unsupported(self) -> bool:
@@ -322,6 +434,10 @@ class Review:
     biggest_gap_confidence: float
     gap_distribution: dict[str, float]
     metrics: RequestMetrics
+    # draft_line_text → original_line_text (None when no original line supports it)
+    evidence: dict[str, str | None] = field(default_factory=dict)
+    # requirement_text → draft_line_text that addresses it (None when uncovered)
+    coverage: dict[str, str | None] = field(default_factory=dict)
 
     @property
     def line_grounding(self) -> float:
@@ -491,8 +607,9 @@ def review(
     job_description: str,
     draft: str,
     carried: Mapping[str, float] | None = None,
+    carried_evidence: Mapping[str, str | None] | None = None,
 ) -> Review:
-    """Score one draft, check it for fabrication, and audit its lines.
+    """Score one draft, check it for fabrication, audit its lines, and measure JD coverage.
 
     One request: every question sees the same state and is answered independently, so the
     line audit costs the question tokens and almost no extra latency.
@@ -501,16 +618,24 @@ def review(
     that survived unchanged keep their verdict: they are not asked again, which saves input
     tokens and, more importantly, keeps their verdicts from jittering between rounds so the
     only movement in the score comes from what actually changed.
+
+    ``carried_evidence`` holds the source-line mappings from the previous draft.  Lines that
+    survived unchanged are not re-asked, so the evidence cost rises only by one Choice per
+    changed line.
     """
     lines = claim_lines(draft)
     known = carried or {}
     fresh = tuple(dict.fromkeys(line for line in lines if line not in known))
+    original_lines = claim_lines(original_resume)
+    requirements = split_requirements(job_description)
     state = {
         "original_resume": original_resume,
         "job_description": job_description,
         "candidate_resume": draft,
     }
-    response, metrics = timed_call(client, state=state, questions=build_questions(fresh))
+    response, metrics = timed_call(
+        client, state=state, questions=build_questions(fresh, original_lines, requirements)
+    )
     answers = response.answers
 
     scores = {name: answers[name].score for name in DIMENSIONS}
@@ -523,37 +648,49 @@ def review(
 
     guardrails = {name: answers[name].noul for name in GUARDRAILS}
 
-    # Build per-line support scores, using claim-level minimum when available.
-    settled: dict[str, float] = {}
-    failing_claims: dict[str, str | None] = {}
+    audited = settle_lines(fresh, lines, answers, known)
+    # Extract source-line evidence for fresh lines; carry forward for unchanged ones.
+    known_ev: dict[str, str | None] = dict(carried_evidence or {})
+    fresh_ev: dict[str, str | None] = {}
     for index, line in enumerate(fresh):
-        line_support = answers[line_question_id(index)].noul
-        claims = split_claims(line)
-        if len(claims) > 1:
-            # The line passes only when every claim passes.
-            claim_supports = [
-                answers[claim_question_id(index, ci)].noul for ci in range(len(claims))
-            ]
-            weakest_ci = min(range(len(claims)), key=lambda i: claim_supports[i])
-            claim_min = claim_supports[weakest_ci]
-            if claim_min < line_support:
-                settled[line] = claim_min
-                failing_claims[line] = claims[weakest_ci] if claim_min < LINE_REVIEW_FLOOR else None
-            else:
-                settled[line] = line_support
-                failing_claims[line] = None
+        src_id = source_question_id(index)
+        try:
+            chosen = answers[src_id].choice
+        except (KeyError, AttributeError):
+            fresh_ev[line] = None
+            continue
+        if chosen == "none":
+            fresh_ev[line] = None
         else:
-            settled[line] = line_support
-            failing_claims[line] = None
+            candidates = _candidate_sources(line, original_lines)
+            try:
+                ci = int(chosen)
+                fresh_ev[line] = candidates[ci] if 0 <= ci < len(candidates) else None
+            except (ValueError, IndexError):
+                fresh_ev[line] = None
 
-    audited = tuple(
-        AuditedLine(
-            text=line,
-            support=known[line] if line in known else settled[line],
-            failing_claim=None if line in known else failing_claims.get(line),
-        )
+    evidence: dict[str, str | None] = {
+        line: known_ev[line] if line in known_ev else fresh_ev.get(line)
         for line in lines
-    )
+    }
+
+    # Coverage: which draft line addresses each JD requirement?
+    coverage: dict[str, str | None] = {}
+    for req_idx, req in enumerate(requirements):
+        cov_id = coverage_question_id(req_idx)
+        try:
+            chosen = answers[cov_id].choice
+        except (KeyError, AttributeError):
+            coverage[req] = None
+            continue
+        if chosen == "none":
+            coverage[req] = None
+        else:
+            try:
+                line_idx = int(chosen)
+                coverage[req] = lines[line_idx] if 0 <= line_idx < len(lines) else None
+            except (ValueError, IndexError):
+                coverage[req] = None
 
     gap = answers["biggest_gap"]
     return Review(
@@ -568,4 +705,77 @@ def review(
         biggest_gap_confidence=gap.confidence,
         gap_distribution=dict(gap.probabilities),
         metrics=metrics,
+        evidence=evidence,
+        coverage=coverage,
     )
+
+
+def settle_lines(
+    fresh: tuple[str, ...],
+    lines: tuple[str, ...],
+    answers: Mapping[str, Any],
+    known: Mapping[str, float],
+) -> tuple[AuditedLine, ...]:
+    """Turn the per-line and per-claim answers into the audited lines the views read.
+
+    A line takes the probability of its weakest claim, because a bullet with one invented
+    clause is not a supported bullet. ``known`` lines were never asked; they keep the
+    verdict they already earned.
+    """
+    settled: dict[str, float] = {}
+    failing_claims: dict[str, str | None] = {}
+    all_claims: dict[str, tuple[tuple[str, float], ...]] = {}
+    for index, line in enumerate(fresh):
+        line_support = answers[line_question_id(index)].noul
+        claims = split_claims(line)
+        if len(claims) > 1:
+            claim_supports = [
+                answers[claim_question_id(index, ci)].noul for ci in range(len(claims))
+            ]
+            all_claims[line] = tuple(zip(claims, claim_supports, strict=True))
+            weakest = min(range(len(claims)), key=lambda i: claim_supports[i])
+            claim_min = claim_supports[weakest]
+            if claim_min < line_support:
+                settled[line] = claim_min
+                failing_claims[line] = claims[weakest] if claim_min < LINE_REVIEW_FLOOR else None
+            else:
+                settled[line] = line_support
+                failing_claims[line] = None
+        else:
+            all_claims[line] = ((line, line_support),)
+            settled[line] = line_support
+            failing_claims[line] = None
+    return tuple(
+        AuditedLine(
+            text=line,
+            support=known[line] if line in known else settled[line],
+            failing_claim=None if line in known else failing_claims.get(line),
+            claims=() if line in known else all_claims.get(line, ()),
+        )
+        for line in lines
+    )
+
+
+def audit_lines(
+    client: TypeSafeClient,
+    *,
+    original_resume: str,
+    draft: str,
+    carried: Mapping[str, float] | None = None,
+) -> tuple[AuditedLine, ...]:
+    """Ground the lines of an edited draft — the questions a person's edit can move.
+
+    The page asks this after a debounced edit. It is the same question, floor, and claim
+    splitting as a round applied to the lines that changed; the five dimension scores, the
+    three guardrails, the gap ``Choice``, the source ``Choice`` and the coverage matrix are
+    left out because editing a bullet cannot change them, and asking would be paid for and
+    thrown away.
+    """
+    lines = claim_lines(draft)
+    known = carried or {}
+    fresh = tuple(dict.fromkeys(line for line in lines if line not in known))
+    if not fresh:
+        return settle_lines((), lines, {}, known)
+    state = {"original_resume": original_resume, "candidate_resume": draft}
+    response, _ = timed_call(client, state=state, questions=line_questions(fresh))
+    return settle_lines(fresh, lines, response.answers, known)

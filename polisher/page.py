@@ -63,7 +63,7 @@ main{display:grid;grid-template-columns:minmax(330px,390px) 1fr;gap:18px;padding
 .diff .head{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;
   padding:12px 16px;border-bottom:1px solid var(--border);background:var(--panel2)}
 .diff .body{max-height:calc(100vh - 260px);overflow:auto}
-.line{display:grid;grid-template-columns:42px 42px 1fr;gap:10px;padding:1px 12px;
+.line{display:grid;grid-template-columns:42px 42px 1fr auto;gap:10px;padding:1px 12px;
   white-space:pre-wrap;word-break:break-word}
 .line .g{color:#5d6675;text-align:right;font-variant-numeric:tabular-nums;
   font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;user-select:none}
@@ -74,10 +74,45 @@ main{display:grid;grid-template-columns:minmax(330px,390px) 1fr;gap:18px;padding
 .line.skip{color:var(--muted);font-style:italic;justify-content:center;padding:5px 12px;
   border-top:1px dashed var(--border);border-bottom:1px dashed var(--border);display:block;text-align:center}
 details summary{cursor:pointer;color:var(--muted)}
+.src-btn{background:none;border:none;color:var(--muted);cursor:pointer;padding:0 5px;font-size:11px;border-radius:3px;line-height:1;vertical-align:middle}
+.src-btn:hover{color:var(--text)}
+.src-row{display:none;padding:2px 12px 6px 100px;font-size:12px;background:rgba(100,100,160,.04);border-bottom:1px solid var(--border)}
+.src-row.open{display:block}
+.wslider-row{display:flex;gap:6px;align-items:center;font-size:12px;white-space:nowrap}
+.wslider-row input[type=range]{width:64px}
 footer{padding:0 22px 30px;color:var(--muted)}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:13px}
 .note{color:var(--muted);font-size:12.5px}
 .star{color:var(--warn)}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0}
+/* Grounding ledger: the distribution behind the mean, with the uncertain band visible. */
+.unc{color:var(--warn)} .bad{color:var(--bad)} .ok{color:var(--good)}
+.ledger{list-style:none;margin:8px 0 0;padding:0;max-height:320px;overflow:auto}
+.ledger li{border-top:1px solid var(--border);padding:6px 0}
+.ledger .ln{display:flex;gap:8px;align-items:baseline}
+.ledger .ln .t{flex:1;word-break:break-word}
+.ledger .p{font-variant-numeric:tabular-nums;min-width:34px;text-align:right;flex:0 0 34px}
+.claim{display:flex;gap:8px;align-items:baseline;padding:1px 0 1px 12px;font-size:12px;color:var(--muted)}
+.filters{display:flex;gap:6px;margin:8px 0 0;flex-wrap:wrap}
+.filters button{padding:3px 9px;font-size:12px}
+.filters button.on{border-color:var(--accent);background:#231535}
+/* Coverage: one row per requirement, and an empty cell where the candidate has nothing. */
+.cov{display:grid;grid-template-columns:18px 1fr;gap:3px 8px;margin:8px 0 0;font-size:12.5px}
+.cov .mark{text-align:center}
+.cov .mark.ok{color:var(--good)} .cov .mark.no{color:var(--muted)}
+.cov .ans{grid-column:2;color:var(--muted);font-size:12px;margin:0 0 7px}
+.meter{height:7px;border-radius:4px;background:#242a35;overflow:hidden;margin:5px 0}
+.meter > i{display:block;height:100%;background:var(--accent)}
+.meter.hot > i{background:var(--bad)}
+/* Live lint: the winning draft, editable, with the reviewer's verdict in the gutter. */
+.editrow{display:grid;grid-template-columns:22px 1fr;gap:8px;padding:1px 12px;align-items:start}
+.editrow .dot{text-align:center;color:var(--muted);cursor:help;font-size:11px;line-height:1.9}
+.editrow .dot.unc{color:var(--warn)} .editrow .dot.bad{color:var(--bad)} .editrow .dot.ok{color:var(--good)}
+.editable{outline:none;border-radius:3px;padding:0 4px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;
+  white-space:pre-wrap;word-break:break-word}
+.editable:focus{background:#231535}
 </style>
 </head>
 <body>
@@ -87,6 +122,8 @@ footer{padding:0 22px 30px;color:var(--muted)}
   <span id="paths" class="muted mono"></span>
   <span id="stop" class="muted" style="margin-left:auto"></span>
 </header>
+<!-- Rounds arrive on their own, so the newest one is announced rather than hunted for. -->
+<p id="live" class="sr-only" role="status" aria-live="polite"></p>
 
 <div class="toolbar">
   <button id="undo" title="previous version (←)">← Undo</button>
@@ -95,17 +132,34 @@ footer{padding:0 22px 30px;color:var(--muted)}
   <span id="savestatus" class="note"></span>
   <label class="toggle"><input type="checkbox" id="hide" checked /> hide unchanged (h)</label>
   <label class="toggle"><input type="checkbox" id="vsorig" /> compare with original (c)</label>
+  <button id="rubric-btn" title="rubric weight controls (w)">Weights ▸</button>
+  <button id="edit" title="edit this draft and re-check only the lines you change (e)">✎ Edit</button>
+  <button id="saveedit" class="primary" style="display:none" title="write the edited draft to the output file">Save edited draft</button>
   <div id="timeline" class="timeline"></div>
+</div>
+<div id="rubric-panel" style="display:none;padding:10px 22px;border-bottom:1px solid var(--border);background:var(--bg)">
+  <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start">
+    <span class="muted" style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-top:4px">Re-weight</span>
+    <div id="wsliders" style="display:flex;flex-wrap:wrap;gap:10px"></div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:2px">
+      <span id="wsum" class="muted note"></span>
+      <button id="wreset" style="font-size:12px;padding:4px 8px">Reset</button>
+      <button id="wexport" style="font-size:12px;padding:4px 8px">Copy weights</button>
+      <span id="wreweight-note" class="note" style="color:var(--warn)"></span>
+    </div>
+  </div>
 </div>
 
 <main>
   <div>
     <div class="card" id="scores"></div>
+    <div class="card" id="ledger"></div>
     <div class="card" id="meta"></div>
     <div class="card"><h2>Job description</h2>
       <details><summary>show the target</summary>
         <p class="mono" id="jd" style="white-space:pre-wrap"></p>
       </details>
+      <div id="coverage"></div>
     </div>
   </div>
   <div class="card" style="padding:0;background:none;border:none">
@@ -123,9 +177,15 @@ footer{padding:0 22px 30px;color:var(--muted)}
 <script>
 "use strict";
 const CSRF_TOKEN = "__CSRF_TOKEN__";
-const state = { report:{}, index:0, vsOriginal:false, hideUnchanged:true, touched:false };
+const state = { report:{}, index:0, vsOriginal:false, hideUnchanged:true, touched:false,
+                announced:null, editing:false, editResults:null, editCheckedText:null,
+                editUnsupported:[] };
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// The reviewer audits lines with their bullet marker stripped (judge.claim_lines),
+// while diff rows and editable rows are the file's raw text. One key for both, or a
+// bulleted resume — every resume — would never line up with its own verdicts.
+const auditKey = (text) => String(text).trim().replace(/^[-•*–—·]+/, "").trim();
 const versions = () => state.report.versions || [];
 const current = () => versions()[state.index] || null;
 const previous = () => versions()[state.index - 1] || null;
@@ -190,13 +250,20 @@ function renderScores() {
        <span class="num">${r.weakest_line.support.toFixed(2)}</span>
        <span class="muted mono" style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(r.weakest_line.text)}</span></div>`
     : "";
+  // The buttons carry the flagged line's position, never its text: a line containing a
+  // quote cannot break out of an HTML attribute, and the click handler reads the text
+  // back from the payload, so nothing user-supplied is interpolated into markup.
   const flagged = r.flagged_lines.length
     ? `<h2 style="margin-top:14px">Unsupported lines (${r.flagged_lines.length})</h2>
-       <ul class="list mono">${r.flagged_lines.map((t) => {
+       <ul class="list mono">${r.flagged_lines.map((t, i) => {
          const dec = (r.lines_to_review || []).find(l => l.text === t);
          const d = dec && dec.decision;
-         const badge = d ? ` <span class="badge" style="color:${d==='approved'?'var(--good)':'var(--bad)'}">${d}</span>` : '';
-         const btns = d ? '' : ` <button style="padding:2px 7px;font-size:11px" onclick="sendReview(${JSON.stringify(t)},'approved')">✓ Approve</button><button style="padding:2px 7px;font-size:11px;border-color:var(--bad)" onclick="sendReview(${JSON.stringify(t)},'rejected')">✗ Reject</button>`;
+         const badge = d ? ` <span class="badge" style="color:${d === 'approved' ? 'var(--good)' : 'var(--bad)'}">${esc(d)}</span>` : '';
+         const btns = d ? ''
+           : ` <button class="review" data-version="${v.index}" data-line-index="${i}"`
+             + ` data-verdict="approved" style="padding:2px 7px;font-size:11px">✓ Approve</button>`
+             + ` <button class="review" data-version="${v.index}" data-line-index="${i}"`
+             + ` data-verdict="rejected" style="padding:2px 7px;font-size:11px;border-color:var(--bad)">✗ Reject</button>`;
          return `<li>${esc(t)}${badge}${btns}</li>`;
        }).join("")}</ul>`
     : "";
@@ -204,9 +271,13 @@ function renderScores() {
   // error that takes the whole page down, and the browser is the only thing that catches it.
   const note = v.reviewed ? "" : "unchanged, scores carried";
   const carriedNote = note ? ` <span class='muted'>${note}</span>` : "";
-  $("scores").innerHTML = `
+  const reweighted = _isReweighted();
+  const rwOverall = reweighted ? _recomputeOverall(v, _activeWeights()) : null;
+  const displayOverall = rwOverall !== null ? rwOverall : r.overall;
+  const rwNote = reweighted ? `<div class="note" style="color:var(--warn);margin:2px 0">re-weighted view — scores unchanged</div>` : '';
+  $('scores').innerHTML = `
     <h2>${esc(v.label)}${best}${blocked}${carriedNote}</h2>
-    <div class="big">${r.overall.toFixed(2)}</div>
+    <div class="big">${displayOverall.toFixed(2)}</div>${rwNote}
     <div class="muted">quality ${r.quality.toFixed(2)} × grounded ${r.groundedness.toFixed(2)}
       ${delta(r.overall, prev && prev.review ? prev.review.overall : null)}</div>
     <h2 style="margin-top:16px">Dimensions</h2>
@@ -249,6 +320,7 @@ function renderMeta() {
 }
 
 function diffRows(v) {
+  const evidence = (v.review && v.review.evidence) ? v.review.evidence : {};
   const key = state.vsOriginal ? "diff_vs_original" : "diff_vs_previous";
   const d = v[key];
   if (!d || !d.rows.length) return `<div class="line skip">nothing to compare yet</div>`;
@@ -256,8 +328,21 @@ function diffRows(v) {
     .map((row) => {
       if (row.kind === "skip") return `<div class="line skip">⋯ ${row.count} unchanged lines</div>`;
       const g1 = row.old ?? "", g2 = row.new ?? "";
-      return `<div class="line ${row.kind}"><span class="g">${g1}</span><span class="g">${g2}</span>
-        <span class="t">${esc(row.text) || "&nbsp;"}</span></div>`;
+      const lineKey = auditKey(row.text);
+      const hasEvidence = Object.prototype.hasOwnProperty.call(evidence, lineKey);
+      const src = evidence[lineKey];
+      const srcBtn = hasEvidence
+        ? `<button class="src-btn" title="show source line">▸</button>`
+        : `<span></span>`;
+      const srcRow = hasEvidence
+        ? `<div class="src-row">${
+            src !== null && src !== undefined
+              ? `<span class="muted">source: </span><span class="mono">${esc(src)}</span>`
+              : `<span style="color:var(--bad)">⊘ no line in the original resume supports this claim</span>`
+          }</div>`
+        : '';
+      return `<div class="line ${row.kind}"><span class="g">${g1}</span><span class="g">${g2}</span>` +
+             `<span class="t">${esc(row.text) || "&nbsp;"}</span>${srcBtn}</div>${srcRow}`;
     }).join("");
 }
 
@@ -270,6 +355,7 @@ function renderDiff() {
       : "";
     return;
   }
+  if (state.editing) { renderEditable(v); return; }
   const key = state.vsOriginal ? "diff_vs_original" : "diff_vs_previous";
   const d = v[key];
   const from = state.vsOriginal ? "the original resume" : (previous() || {}).label || "the original resume";
@@ -286,10 +372,265 @@ function renderDiff() {
     : diffRows(v);
 }
 
+// ── Grounding ledger, coverage, and cost ──────────────────────────────────────
+// Everything below is arithmetic over judgments the run already paid for. The one
+// exception is the debounced re-check of an edit, which asks about changed lines only.
+
+function _band(support) {
+  const cfg = state.report.config || {};
+  const floor = cfg.line_support_floor ?? 0.5;
+  const review = cfg.line_review_floor ?? 0.8;
+  if (support < floor) return "bad";
+  if (support < review) return "unc";
+  return "ok";
+}
+function _bandWord(band) {
+  return band === "bad" ? "unsupported" : band === "unc" ? "uncertain" : "supported";
+}
+
+let _ledgerFilter = "attention";
+
+function ledgerItem(entry) {
+  const band = _band(entry.support);
+  const claims = entry.claims || [];
+  // Show the per-claim distribution only where it says something the line score does not.
+  const claimRows = claims.length > 1
+    ? claims.map((claim) => {
+        const b = _band(claim.support);
+        return `<div class="claim"><span class="p ${b}">${claim.support.toFixed(2)}</span>` +
+               `<span>${esc(claim.text)}</span></div>`;
+      }).join("")
+    : "";
+  const failing = entry.failing_claim && claims.length <= 1
+    ? `<div class="claim"><span class="p bad">weak</span><span>${esc(entry.failing_claim)}</span></div>`
+    : "";
+  return `<li><div class="ln">
+      <span class="p ${band}" title="${_bandWord(band)}">${entry.support.toFixed(2)}</span>
+      <span class="t">${esc(entry.text)}</span></div>${failing}${claimRows}</li>`;
+}
+
+function renderLedger() {
+  const el = $("ledger");
+  const v = current();
+  const entries = (v && v.review && v.review.ledger) || [];
+  if (!entries.length) { el.innerHTML = ""; return; }
+  const cfg = state.report.config || {};
+  const floor = cfg.line_support_floor ?? 0.5;
+  const review = cfg.line_review_floor ?? 0.8;
+  const trust = v.review.trust || {};
+  const withBand = entries.map((entry) => Object.assign({}, entry, { band: _band(entry.support) }));
+  const attention = withBand.filter((entry) => entry.band !== "ok");
+  const shown = _ledgerFilter === "all" ? withBand
+    : _ledgerFilter === "attention" ? attention
+    : withBand.filter((entry) => entry.band === _ledgerFilter);
+  const filters = [
+    ["attention", `needs attention (${attention.length})`],
+    ["all", `all (${withBand.length})`],
+    ["unc", `uncertain (${trust.uncertain || 0})`],
+    ["bad", `unsupported (${trust.unsupported || 0})`],
+  ];
+  el.innerHTML = `<h2>Grounding ledger</h2>
+    <div class="note">${trust.audited || 0} lines audited · ${trust.carried || 0} carried from the
+      previous draft instead of re-asked · uncertain band ${floor}–${review}</div>
+    <div class="filters">${filters.map(([key, label]) =>
+      `<button data-filter="${key}" class="${_ledgerFilter === key ? "on" : ""}">${esc(label)}</button>`
+    ).join("")}</div>
+    ${shown.length ? `<ul class="ledger">${shown.map(ledgerItem).join("")}</ul>`
+                   : `<p class="note">nothing in this band</p>`}`;
+  el.querySelectorAll(".filters button").forEach((button) => {
+    button.addEventListener("click", () => { _ledgerFilter = button.dataset.filter; renderLedger(); });
+  });
+}
+
+function renderCoverage() {
+  const el = $("coverage");
+  const v = current();
+  const cov = (v && v.review && v.review.coverage) || [];
+  if (!cov.length) { el.innerHTML = ""; return; }
+  const open = cov.filter((entry) => !entry.draft_line);
+  el.innerHTML = `<h2 style="margin-top:14px">Requirements answered (${cov.length - open.length} of ${cov.length})</h2>
+    <div class="cov">${cov.map((entry) =>
+      `<span class="mark ${entry.draft_line ? "ok" : "no"}">${entry.draft_line ? "✓" : "○"}</span>
+       <span>${esc(entry.requirement)}</span>
+       <span class="ans">${entry.draft_line
+         ? "answered by: " + esc(entry.draft_line)
+         : "no line in this draft answers it — leave it out rather than invent it"}</span>`
+    ).join("")}</div>`;
+}
+
+function renderTotals() {
+  const r = state.report;
+  const cfg = r.config || {};
+  const t = r.totals || {};
+  const reviewer = t.reviewer_tokens || 0;
+  const total = t.total_tokens || 0;
+  const share = total ? Math.round((reviewer / total) * 100) : 0;
+  const budget = cfg.max_tokens ? [total, cfg.max_tokens, "token"]
+    : cfg.max_seconds ? [t.seconds || 0, cfg.max_seconds, "time"] : null;
+  let meter;
+  if (budget) {
+    const pct = Math.min(100, (budget[0] / budget[1]) * 100);
+    meter = `<div class="note">${budget[2]} budget: ${budget[0].toLocaleString()} of
+      ${budget[1].toLocaleString()} used (${Math.round(pct)}%)</div>
+      <div class="meter ${pct >= 90 ? "hot" : ""}"><i style="width:${pct}%"></i></div>`;
+  } else {
+    meter = `<div class="note">no budget cap set — the loop stops on the score alone</div>`;
+  }
+  const perRound = versions().filter((v) => v.review).map((v) => {
+    const w = (v.review.writer && v.review.writer.total_tokens) || 0;
+    const rv = (v.review.reviewer && v.review.reviewer.total_tokens) || 0;
+    const sum = w + rv || 1;
+    return `<div class="row"><span class="label">${esc(v.label)}</span>
+      <span class="bar" title="reviewer share of this round's tokens"><i style="width:${(rv / sum) * 100}%"></i></span>
+      <span class="delta" title="writer tokens">${w.toLocaleString()}w</span>
+      <span class="delta" title="reviewer tokens">${rv.toLocaleString()}r</span></div>`;
+  }).join("");
+  const best = versions().filter((v) => v.review && v.review.is_best).pop()
+    || versions().filter((v) => v.review).pop();
+  const trust = best && best.review.trust;
+  const trustStrip = trust ? `<h2 style="margin-top:14px">How much to trust ${esc(best.label)}</h2>
+    <div class="kv">
+      <span class="muted">audited</span><span>${trust.audited} lines · ${trust.carried} carried, not re-asked</span>
+      <span class="muted">uncertain</span><span>${trust.uncertain} lines in the band · ${trust.low_confidence} dimension(s) answered without confidence</span>
+      <span class="muted">needs a person</span><span>${trust.unsupported} unsupported line(s)</span>
+    </div>` : "";
+  $("totals").innerHTML = `<div class="kv">
+      <span class="muted">writer</span><span>${t.writer_calls || 0} calls · ${(t.writer_tokens || 0).toLocaleString()} tokens</span>
+      <span class="muted">reviewer</span><span>${t.reviewer_calls || 0} calls · ${reviewer.toLocaleString()} tokens · ${share}% of the run</span>
+      <span class="muted">total</span><span>${total.toLocaleString()} tokens · ${t.seconds || 0}s</span>
+    </div>${meter}
+    <h2 style="margin-top:14px">Cost per round
+      <span class="muted" style="letter-spacing:0;text-transform:none">(bar = reviewer share)</span></h2>
+    ${perRound || '<p class="note">no rounds yet</p>'}
+    ${trustStrip}`;
+}
+
+// ── Editing a draft, with JEV in the gutter ───────────────────────────────────
+
+let _editTimer = null;
+
+function editText() {
+  return Array.from($("diff").querySelectorAll(".editable"))
+    .map((el) => el.textContent).join("\\n");
+}
+function _carriedMap(text) {
+  const v = current();
+  if (!v || !v.review) return {};
+  const now = new Set(text.split("\\n").map((line) => auditKey(line)));
+  const carried = {};
+  (v.review.ledger || []).forEach((entry) => {
+    if (now.has(entry.text)) carried[entry.text] = entry.support;
+  });
+  return carried;
+}
+function toggleEdit() {
+  const v = current();
+  if (!v || !v.review) { setSaved("pick a reviewed round to edit"); return; }
+  state.editing = !state.editing;
+  state.editResults = null;
+  state.editCheckedText = null;
+  state.editUnsupported = [];
+  setSaved(state.editing ? "edit the draft — only the lines you change are re-checked" : "");
+  render();
+}
+function renderEditable(v) {
+  $("diffhead").innerHTML = `<strong>Editing ${esc(v.label)}</strong>
+    <span class="muted">only the lines you change are re-checked</span>
+    <span id="lints" class="note"></span>`;
+  $("diff").innerHTML = v.text.split("\\n").map((text) =>
+    `<div class="editrow"><span class="dot muted">·</span>` +
+    `<div class="editable" contenteditable="plaintext-only" spellcheck="false">${esc(text)}</div></div>`
+  ).join("");
+  if (state.editResults) applyEditResults();
+}
+function applyEditResults() {
+  const results = state.editResults || {};
+  $("diff").querySelectorAll(".editrow").forEach((row) => {
+    const text = auditKey(row.querySelector(".editable").textContent);
+    const dot = row.querySelector(".dot");
+    const found = results[text];
+    dot.className = "dot " + (found ? found.band : "muted");
+    dot.textContent = "●";
+    dot.title = found
+      ? `${found.support.toFixed(2)} — ${_bandWord(found.band)}` +
+        (found.failing_claim ? ": " + found.failing_claim : "")
+      : "not checked (no factual claim to ground)";
+  });
+  const unsupported = state.editUnsupported || [];
+  const lints = $("lints");
+  if (lints) {
+    lints.textContent = unsupported.length
+      ? `${unsupported.length} line(s) cannot be grounded`
+      : "every line is grounded";
+    lints.style.color = unsupported.length ? "var(--bad)" : "var(--good)";
+  }
+}
+async function checkEdit() {
+  if (!state.editing) return;
+  const text = editText();
+  try {
+    const res = await fetch("/api/check", {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Csrf-Token": CSRF_TOKEN },
+      body: JSON.stringify({ text, carried: _carriedMap(text) }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { setSaved(`check unavailable: ${data.error || res.status}`); return; }
+    state.editResults = {};
+    (data.lines || []).forEach((line) => {
+      state.editResults[line.text] = { band: _band(line.support), support: line.support,
+                                       failing_claim: line.failing_claim };
+    });
+    state.editCheckedText = text;
+    state.editUnsupported = data.unsupported || [];
+    applyEditResults();
+    updateEditControls();
+  } catch (error) {
+    setSaved(`check error: ${error}`);
+  }
+}
+function updateEditControls() {
+  $("edit").textContent = state.editing ? "✎ Done" : "✎ Edit";
+  const saveEdit = $("saveedit");
+  saveEdit.style.display = state.editing ? "" : "none";
+  const clean = state.editing && state.editCheckedText !== null
+    && state.editCheckedText === editText()
+    && (state.editUnsupported || []).length === 0;
+  saveEdit.disabled = !clean;
+  saveEdit.title = clean
+    ? "write the edited draft to the output file"
+    : "re-check the edit first — a line that cannot be grounded blocks saving";
+}
+async function saveEdited() {
+  setSaved("saving edited draft…");
+  try {
+    const res = await fetch("/api/save", {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Csrf-Token": CSRF_TOKEN },
+      body: JSON.stringify({ text: editText() }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setSaved(res.ok ? `saved edited draft → ${data.saved}`
+                    : `not saved: ${data.error || res.status}`);
+    if (res.ok) { state.editing = false; await refresh(); }
+  } catch (error) {
+    setSaved(`not saved: ${error}`);
+  }
+}
+
 function renderTimeline() {
-  $("timeline").innerHTML = versions().map((v, i) => {
-    const score = v.review ? v.review.overall.toFixed(2) : "—";
-    const star = v.review && v.review.is_best ? '<span class="star">★</span>' : "";
+  const reweighted = _isReweighted();
+  const rwBestIdx = reweighted ? _reweightedBestIndex() : null;
+  $('timeline').innerHTML = versions().map((v, i) => {
+    const rwScore = reweighted ? _recomputeOverall(v, _activeWeights()) : null;
+    const score = rwScore !== null ? rwScore.toFixed(2) : (v.review ? v.review.overall.toFixed(2) : '—');
+    const isLoopBest = v.review && v.review.is_best;
+    const isRwBest = reweighted && v.index === rwBestIdx && v.review;
+    const star = isRwBest
+      ? '<span class="star" title="re-weighted best">★</span>'
+      : (isLoopBest && !reweighted
+          ? '<span class="star">★</span>'
+          : (isLoopBest ? '<span class="muted" title="loop best">◆</span>' : ''));
     const dot = v.saved ? '<span class="muted" title="saved to the output file">●</span>' : "";
     return `<span class="chip ${i === state.index ? "sel" : ""}" data-i="${i}">
       ${esc(v.label)} <span class="n">${score}</span>${star}${dot}</span>`;
@@ -314,28 +655,43 @@ function render() {
     · up to ${cfg.max_iterations} rounds · stop when a round beats the best by less than
     ${cfg.min_improvement} for ${cfg.patience} rounds, or at ${cfg.target_score}
     · undo/next with ← →`;
-  const t = r.totals || {};
-  $("totals").innerHTML = `<span class="muted">writer</span><span>${t.writer_calls || 0} calls · ${(t.writer_tokens || 0).toLocaleString()} tokens</span>
-    <span class="muted">reviewer</span><span>${t.reviewer_calls || 0} calls · ${(t.reviewer_tokens || 0).toLocaleString()} tokens</span>
-    <span class="muted">total</span><span>${(t.total_tokens || 0).toLocaleString()} tokens · ${t.seconds || 0}s</span>`;
+  const newest = versions()[versions().length - 1];
+  if (newest && newest.review && newest.index !== state.announced) {
+    state.announced = newest.index;
+    $("live").textContent =
+      `${newest.label} finished: overall ${newest.review.overall.toFixed(2)}`;
+  }
   $("undo").disabled = state.index <= 0;
   $("next").disabled = state.index >= versions().length - 1;
   // While the loop runs, it owns the output file: it rewrites it whenever a round becomes
   // the new best. Picking a version is a decision to make once the run has stopped.
   const canSave = !live && current() && current().review;
-  $("save").disabled = !canSave;
+  $("save").disabled = !canSave || state.editing;
   $("save").title = live
     ? "the run is still writing this file with its best draft"
     : "write this version to the output file";
+  $("edit").disabled = live || !current() || !current().review;
+  $("edit").title = live
+    ? "wait for the run to finish before editing"
+    : "edit this draft and re-check only the lines you change (e)";
   renderTimeline();
   renderScores();
+  renderLedger();
   renderMeta();
+  renderCoverage();
   renderDiff();
+  renderTotals();
+  updateEditControls();
 }
 
 function select(index) {
   state.touched = true;
   state.index = Math.max(0, Math.min(versions().length - 1, index));
+  // Editing belongs to the version that was open; switching versions ends the edit.
+  state.editing = false;
+  state.editResults = null;
+  state.editCheckedText = null;
+  state.editUnsupported = [];
   render();
 }
 function step(delta) { select(state.index + delta); }
@@ -361,13 +717,21 @@ async function save() {
 
 async function sendReview(line, verdict) {
   try {
-    await fetch("/api/review", {
+    const res = await fetch("/api/review", {
       method: "POST",
       headers: { "content-type": "application/json", "X-Csrf-Token": CSRF_TOKEN },
       body: JSON.stringify({ line, verdict }),
     });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setSaved(`review error: ${data.error || res.status}`);
+      return;
+    }
+    setSaved(`${verdict}: ${line}`);
     await refresh();
-  } catch (_) {}
+  } catch (error) {
+    setSaved(`review error: ${error}`);
+  }
 }
 
 async function refresh() {
@@ -385,17 +749,153 @@ async function refresh() {
   } catch (error) { /* the server went away; keep the last paint */ }
 }
 
+// Delegated: the flagged list is rebuilt on every render, so one listener on the card
+// covers every review button the page will ever contain.
+$("scores").addEventListener("click", (event) => {
+  const button = event.target.closest("button.review");
+  if (!button) return;
+  const version = versions().find((v) => v.index === Number(button.dataset.version));
+  const line = version && version.review
+    ? version.review.flagged_lines[Number(button.dataset.lineIndex)]
+    : undefined;
+  if (line === undefined) return;
+  sendReview(line, button.dataset.verdict);
+});
+
 $("undo").addEventListener("click", () => step(-1));
 $("next").addEventListener("click", () => step(1));
 $("save").addEventListener("click", save);
+$("edit").addEventListener("click", toggleEdit);
+$("saveedit").addEventListener("click", saveEdited);
+// One request per pause, and only the lines that changed are asked about: the rest
+// arrive as carried verdicts, exactly as they do between rounds of the loop.
+$("diff").addEventListener("input", (event) => {
+  if (!state.editing) return;
+  const row = event.target.closest(".editrow");
+  const dot = row && row.querySelector(".dot");
+  if (dot) { dot.className = "dot"; dot.textContent = "…"; dot.title = "checking"; }
+  clearTimeout(_editTimer);
+  _editTimer = setTimeout(checkEdit, 700);
+});
 $("hide").addEventListener("change", (e) => { state.hideUnchanged = e.target.checked; renderDiff(); });
 $("vsorig").addEventListener("change", (e) => { state.vsOriginal = e.target.checked; renderDiff(); });
-document.addEventListener("keydown", (event) => {
-  if (event.target.tagName === "INPUT") return;
-  if (event.key === "ArrowLeft") { event.preventDefault(); step(-1); }
-  if (event.key === "ArrowRight") { event.preventDefault(); step(1); }
-  if (event.key === "h") { $("hide").checked = !$("hide").checked; state.hideUnchanged = $("hide").checked; renderDiff(); }
-  if (event.key === "c") { $("vsorig").checked = !$("vsorig").checked; state.vsOriginal = $("vsorig").checked; renderDiff(); }
+
+// Evidence expand: delegated so it survives re-renders of #diff innerHTML.
+$('diff').addEventListener('click', (event) => {
+  const btn = event.target.closest('button.src-btn');
+  if (!btn) return;
+  const lineDiv = btn.closest('.line');
+  const srcRow = lineDiv && lineDiv.nextElementSibling;
+  if (srcRow && srcRow.classList.contains('src-row')) {
+    const open = srcRow.classList.toggle('open');
+    btn.textContent = open ? '▾' : '▸';
+  }
+});
+
+// ── Weight sliders ────────────────────────────────────────────────────────────
+let _customWeights = null;
+
+function _defaultWeights() {
+  return Object.assign({}, (state.report.manifest || {}).weights || {});
+}
+function _activeWeights() {
+  return _customWeights || _defaultWeights();
+}
+function _isReweighted() {
+  if (!_customWeights) return false;
+  const def = _defaultWeights();
+  return Object.keys(_customWeights).some(
+    (k) => Math.abs((_customWeights[k] || 0) - (def[k] || 0)) > 0.001
+  );
+}
+function _recomputeOverall(v, weights) {
+  if (!v || !v.review) return null;
+  const total = Object.values(weights).reduce((a, b) => a + b, 0) || 1;
+  let q = 0;
+  for (const [name, w] of Object.entries(weights)) {
+    const s = v.review.scores && v.review.scores[name];
+    if (s) q += (w / total) * s.normalized;
+  }
+  return q * v.review.groundedness;
+}
+function _reweightedBestIndex() {
+  const weights = _activeWeights();
+  let best = -1, bestScore = -1;
+  for (const v of versions()) {
+    const sc = _recomputeOverall(v, weights);
+    if (sc !== null && sc > bestScore) { bestScore = sc; best = v.index; }
+  }
+  return best;
+}
+function _updateWeightPanel() {
+  const weights = _activeWeights();
+  const total = Object.values(weights).reduce((a, b) => a + b, 0);
+  const sumEl = $('wsum');
+  if (sumEl) sumEl.textContent = `sum ${Math.round(total * 100)}%`;
+  const noteEl = $('wreweight-note');
+  if (noteEl) noteEl.textContent = _isReweighted() ? 're-weighted view — scores unchanged' : '';
+}
+function _initWeightSliders() {
+  const weights = _defaultWeights();
+  if (!Object.keys(weights).length) return;
+  $('wsliders').innerHTML = Object.entries(weights).map(([dim, w]) => {
+    const cur = (_customWeights && _customWeights[dim] !== undefined) ? _customWeights[dim] : w;
+    return `<div class="wslider-row">
+      <span style="min-width:115px;overflow:hidden;text-overflow:ellipsis" title="${esc(dim)}">${esc(dim)}</span>
+      <input type="range" min="0" max="50" step="1" value="${Math.round(cur * 100)}" data-dim="${esc(dim)}">
+      <span data-wpct="${esc(dim)}" style="min-width:34px;text-align:right">${Math.round(cur * 100)}%</span>
+    </div>`;
+  }).join('');
+  _updateWeightPanel();
+}
+$('rubric-btn').addEventListener('click', () => {
+  const panel = $('rubric-panel');
+  const open = panel.style.display === 'none';
+  panel.style.display = open ? 'block' : 'none';
+  $('rubric-btn').textContent = open ? 'Weights ▾' : 'Weights ▸';
+  if (open) _initWeightSliders();
+});
+$('wsliders').addEventListener('input', (e) => {
+  const slider = e.target.closest('input[type=range]');
+  if (!slider || !slider.dataset.dim) return;
+  const dim = slider.dataset.dim;
+  if (!_customWeights) _customWeights = Object.assign({}, _defaultWeights());
+  _customWeights[dim] = Number(slider.value) / 100;
+  const pct = $('wsliders').querySelector(`[data-wpct="${CSS.escape(dim)}"]`);
+  if (pct) pct.textContent = `${slider.value}%`;
+  _updateWeightPanel();
+  renderTimeline();
+  renderScores();
+});
+$('wreset').addEventListener('click', () => {
+  _customWeights = null;
+  _initWeightSliders();
+  renderTimeline();
+  renderScores();
+});
+$('wexport').addEventListener('click', () => {
+  const weights = _activeWeights();
+  const total = Object.values(weights).reduce((a, b) => a + b, 0) || 1;
+  const normalized = Object.fromEntries(
+    Object.entries(weights).map(([k, v]) => [k, Math.round(v / total * 1000) / 1000])
+  );
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(JSON.stringify(normalized, null, 2))
+      .then(() => setSaved('weights copied to clipboard'))
+      .catch(() => setSaved('copy failed — see console'));
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  const target = event.target;
+  // Never steal a keystroke from an input or from the editable draft.
+  if (target.tagName === 'INPUT' || target.isContentEditable) return;
+  if (event.key === 'ArrowLeft') { event.preventDefault(); step(-1); }
+  if (event.key === 'ArrowRight') { event.preventDefault(); step(1); }
+  if (event.key === 'h') { $('hide').checked = !$('hide').checked; state.hideUnchanged = $('hide').checked; renderDiff(); }
+  if (event.key === 'c') { $('vsorig').checked = !$('vsorig').checked; state.vsOriginal = $('vsorig').checked; renderDiff(); }
+  if (event.key === 'w') { $('rubric-btn').click(); }
+  if (event.key === 'e') { toggleEdit(); }
 });
 
 state.report = JSON.parse($("payload").textContent || "{}");

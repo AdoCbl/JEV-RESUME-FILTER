@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-from polisher.audit import AuditLog
+import pytest
+
 from polisher.config import Settings
 
 
@@ -29,7 +30,6 @@ def test_run_one_writes_output(tmp_path: Path) -> None:
 
     s = _settings(tmp_path)
     out = tmp_path / "out.txt"
-    audit = AuditLog(None)
 
     with (
         patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
@@ -42,7 +42,6 @@ def test_run_one_writes_output(tmp_path: Path) -> None:
             out=out,
             run_id="test-run-001",
             store=False,
-            audit_log=audit,
             state=None,
             url=None,
             report_json=None,
@@ -61,7 +60,6 @@ def test_run_one_no_store_skips_disk(tmp_path: Path) -> None:
 
     s = replace(_settings(tmp_path), no_store=True)
     out = tmp_path / "out.txt"
-    audit = AuditLog(None)
 
     with (
         patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
@@ -74,7 +72,6 @@ def test_run_one_no_store_skips_disk(tmp_path: Path) -> None:
             out=out,
             run_id="test-run-no-store",
             store=False,
-            audit_log=audit,
             state=None,
             url=None,
             report_json=None,
@@ -84,13 +81,13 @@ def test_run_one_no_store_skips_disk(tmp_path: Path) -> None:
     assert not out.exists()
 
 
-def test_run_one_saves_rounds_to_disk(tmp_path: Path) -> None:
+def test_run_one_saves_rounds_to_disk(tmp_path: Path, monkeypatch) -> None:
     from polisher.cli import _run_one
     from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
 
+    monkeypatch.setattr("polisher.runs.RUNS_DIR", tmp_path / "runs")
     s = _settings(tmp_path)
     out = tmp_path / "out.txt"
-    audit = AuditLog(None)
     run_id = "test-run-store"
 
     with (
@@ -104,7 +101,6 @@ def test_run_one_saves_rounds_to_disk(tmp_path: Path) -> None:
             out=out,
             run_id=run_id,
             store=True,
-            audit_log=audit,
             state=None,
             url=None,
             report_json=None,
@@ -151,6 +147,75 @@ def test_main_diff_runs(tmp_path: Path) -> None:
 
     # Should not raise
     main(["--diff-runs", str(a), str(b)])
+
+
+def _write_secrets(tmp_path: Path) -> Path:
+    path = tmp_path / "secrets.toml"
+    path.write_text('[typesafe]\napi_key = "fake"\n\n[writer]\napi_key = "fake"\n')
+    return path
+
+
+def test_run_batch_continues_after_a_missing_input(tmp_path: Path, monkeypatch) -> None:
+    """One broken pair must not abort the batch, and the exit code counts the failures."""
+    from polisher.cli import main
+    from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
+
+    monkeypatch.setattr("polisher.runs.RUNS_DIR", tmp_path / "runs")
+    resume = tmp_path / "resume.txt"
+    resume.write_text("Jane Smith\nBuilt the API.")
+    jd = tmp_path / "jd.txt"
+    jd.write_text("Backend engineer.")
+    good_a, good_b, missing = tmp_path / "a.txt", tmp_path / "b.txt", tmp_path / "nope.txt"
+    pairs = tmp_path / "pairs.csv"
+    pairs.write_text(
+        "resume,job_description,out\n"
+        f"{resume},{jd},{good_a}\n"
+        f"{missing},{jd},{missing.with_name('bad.txt')}\n"
+        f"{resume},{jd},{good_b}\n"
+    )
+
+    with (
+        patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
+        patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        main(["--batch", str(pairs), "--secrets", str(_write_secrets(tmp_path))])
+
+    assert exit_info.value.code == 1  # exactly one pair failed
+    assert good_a.exists()
+    assert good_b.exists()
+
+
+def test_a_batch_pair_writes_the_payload_its_index_links_to(tmp_path: Path, monkeypatch) -> None:
+    """An index of dead links is not a report, so every row must have written its payload."""
+    import json
+
+    from polisher.cli import main
+    from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
+
+    monkeypatch.setattr("polisher.runs.RUNS_DIR", tmp_path / "runs")
+    resume = tmp_path / "resume.txt"
+    resume.write_text("Jane Smith\nBuilt the API.")
+    jd = tmp_path / "jd.txt"
+    jd.write_text("Backend engineer.")
+    out = tmp_path / "jane.txt"
+    pairs = tmp_path / "pairs.csv"
+    pairs.write_text("resume,job_description,out\n" f"{resume},{jd},{out}\n")
+
+    with (
+        patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
+        patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
+    ):
+        main(["--batch", str(pairs), "--secrets", str(_write_secrets(tmp_path))])
+
+    payload_path = tmp_path / "jane_report.json"
+    assert payload_path.exists(), "the index links to this file"
+    payload = json.loads(payload_path.read_text())
+    assert payload["versions"], "a payload the page can render"
+
+    index = (tmp_path / "pairs.index.html").read_text()
+    assert str(payload_path) in index
+    assert "serve-report" in index
 
 
 def test_main_purge(tmp_path: Path) -> None:

@@ -90,8 +90,9 @@ def new_run_id() -> str:
     return f"{ts}-{uuid.uuid4().hex[:8]}"
 
 
-def run_dir(run_id: str, base: Path = RUNS_DIR) -> Path:
-    return base / run_id
+def run_dir(run_id: str, base: Path | None = None) -> Path:
+    """The directory for one run. ``base`` defaults to :data:`RUNS_DIR` at call time."""
+    return (RUNS_DIR if base is None else base) / run_id
 
 
 # ── Round serialization ───────────────────────────────────────────────────────
@@ -116,12 +117,20 @@ def _round_to_dict(round_: Any) -> dict[str, Any]:
             "quality": r.review.quality,
             "guardrails": r.review.guardrails,
             "lines": [
-                {"text": line.text, "support": line.support} for line in r.review.lines
+                {
+                    "text": line.text,
+                    "support": line.support,
+                    "failing_claim": line.failing_claim,
+                    "claims": [[t, s] for t, s in line.claims],
+                }
+                for line in r.review.lines
             ],
             "reused_lines": r.review.reused_lines,
             "biggest_gap": r.review.biggest_gap,
             "biggest_gap_confidence": r.review.biggest_gap_confidence,
             "gap_distribution": r.review.gap_distribution,
+            "evidence": r.review.evidence,
+            "coverage": r.review.coverage,
             "metrics": r.review.metrics.to_dict(),
         },
     }
@@ -160,13 +169,20 @@ def _round_from_dict(data: dict[str, Any]) -> Any:
         quality=data["review"]["quality"],
         guardrails=data["review"]["guardrails"],
         lines=tuple(
-            AuditedLine(text=line["text"], support=line["support"])
+            AuditedLine(
+                text=line["text"],
+                support=line["support"],
+                failing_claim=line.get("failing_claim"),
+                claims=tuple((t, s) for t, s in line.get("claims", [])),
+            )
             for line in data["review"]["lines"]
         ),
         reused_lines=data["review"]["reused_lines"],
         biggest_gap=data["review"]["biggest_gap"],
         biggest_gap_confidence=data["review"]["biggest_gap_confidence"],
         gap_distribution=data["review"]["gap_distribution"],
+        evidence=data["review"].get("evidence", {}),
+        coverage=data["review"].get("coverage", {}),
         metrics=metrics,
     )
     return Round(

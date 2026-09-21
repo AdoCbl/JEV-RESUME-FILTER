@@ -14,6 +14,7 @@ from .config import Settings
 from .diff import Diff, line_diff
 from .judge import Review
 from .loop import Round
+from .writer import SYSTEM_PROMPT
 
 ORIGINAL = "original"
 ROUND = "round"
@@ -47,12 +48,18 @@ def _rubric_hash() -> str:
     return digest[:16]
 
 
+def _writer_prompt_hash() -> str:
+    """Short hash of the writer system prompt so prompt changes are detectable in comparisons."""
+    return hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest()[:16]
+
+
 def build_manifest(settings: Settings, run_id: str | None = None) -> dict[str, Any]:
     """Version fingerprint embedded in every payload for reproducibility checks."""
     return {
         "run_id": run_id,
         "git_commit": _git_commit(),
         "rubric_hash": _rubric_hash(),
+        "writer_prompt_hash": _writer_prompt_hash(),
         "writer_model": settings.writer_model,
         "writer_base_url": settings.writer_base_url,
         "reviewer_model": settings.reviewer_label,
@@ -112,10 +119,41 @@ def _review_payload(review: Review, *, improvement: float | None, is_best: bool)
                 "support": round(line.support, 3),
                 "unsupported": line.unsupported,
                 "failing_claim": line.failing_claim,
+                "claims": [{"text": t, "support": round(s, 3)} for t, s in line.claims],
             }
             for line in review.lines_to_review()
         ],
+        # Every audited line with its claims, not just the weakest handful: the page
+        # shows the distribution it is summarising, so a reader can see the run is unsure
+        # rather than being told a verdict.
+        "ledger": [
+            {
+                "text": line.text,
+                "support": round(line.support, 3),
+                "unsupported": line.unsupported,
+                "uncertain": judge.LINE_SUPPORT_FLOOR <= line.support < judge.LINE_REVIEW_FLOOR,
+                "failing_claim": line.failing_claim,
+                "claims": [{"text": t, "support": round(s, 3)} for t, s in line.claims],
+            }
+            for line in review.lines
+        ],
+        "trust": {
+            "audited": len(review.lines),
+            "carried": review.reused_lines,
+            "uncertain": sum(
+                1
+                for line in review.lines
+                if judge.LINE_SUPPORT_FLOOR <= line.support < judge.LINE_REVIEW_FLOOR
+            ),
+            "unsupported": len(review.flagged_lines),
+            "low_confidence": len(review.low_confidence),
+        },
         "low_confidence": list(review.low_confidence),
+        "evidence": review.evidence,
+        "coverage": [
+            {"requirement": req, "draft_line": line}
+            for req, line in review.coverage.items()
+        ],
         "reviewer": review.metrics.to_dict(),
     }
 
@@ -241,10 +279,13 @@ def build_report(
             "min_improvement": settings.min_improvement,
             "target_score": settings.target_score,
             "patience": settings.patience,
+            "max_tokens": settings.max_tokens,
+            "max_seconds": settings.max_seconds,
             "weights": judge.WEIGHTS,
             "dimension_order": list(judge.DIMENSIONS),
             "top_level": judge.TOP_LEVEL,
             "line_support_floor": judge.LINE_SUPPORT_FLOOR,
+            "line_review_floor": judge.LINE_REVIEW_FLOOR,
             "fabrication_block": judge.FABRICATION_BLOCK,
             "confidence_floor": judge.CONFIDENCE_FLOOR,
         },

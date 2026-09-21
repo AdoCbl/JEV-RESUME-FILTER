@@ -103,3 +103,58 @@ def test_agenda_includes_biggest_gap_first() -> None:
     agenda = r.agenda()
     assert len(agenda) >= 1
     assert r.biggest_gap == agenda[0]
+
+
+# ── The live lint's question set ──────────────────────────────────────────────
+
+
+def test_audit_lines_asks_only_about_the_lines_that_changed() -> None:
+    """An edit to one bullet must not pay again for scores, guardrails, or the gap Choice."""
+    from polisher.judge import DIMENSIONS, GUARDRAILS, audit_lines
+
+    asked: list[set[str]] = []
+
+    class RecordingClient(FakeTypeSafeClient):
+        def system_one(self, *, state, questions, **kwargs):  # type: ignore[override]
+            asked.append(set(questions))
+            return super().system_one(state=state, questions=questions, **kwargs)
+
+    client = RecordingClient(make_review_answers(0))
+    audited = audit_lines(client, original_resume=ORIGINAL, draft=DRAFT)
+
+    assert len(asked) == 1, "one request per edit, not one per line"
+    keys = asked[0]
+    assert keys, "the edit still has lines to ground"
+    assert not keys & set(DIMENSIONS)
+    assert not keys & set(GUARDRAILS)
+    assert "biggest_gap" not in keys
+    assert all(key.startswith(("line_", "claim_")) for key in keys)
+    assert len(audited) == len(claim_lines(DRAFT))
+
+
+def test_audit_lines_keeps_the_verdict_of_an_unchanged_line() -> None:
+    from polisher.judge import audit_lines
+
+    line = claim_lines(DRAFT)[0]
+    client = FakeTypeSafeClient(make_review_answers(1))
+    audited = audit_lines(client, original_resume=ORIGINAL, draft=DRAFT, carried={line: 0.31})
+    assert audited[0].support == 0.31
+    assert audited[0].claims == ()
+
+
+def test_a_fabricated_claim_inside_a_true_bullet_weakens_the_line() -> None:
+    """The line verdict is its weakest claim: one invented clause is not a true bullet."""
+    from polisher.judge import audit_lines
+
+    line = "Led the platform team at Acme Corp and cut incidents by 90%"
+    answers = make_review_answers(0)
+    answers["line_00"] = FakeNoul(0.95)  # the line as a whole looks fine
+    answers["claim_00_00"] = FakeNoul(0.95)  # "Led the platform team at Acme Corp"
+    answers["claim_00_01"] = FakeNoul(0.10)  # "and cut incidents by 90%"
+    client = FakeTypeSafeClient(answers)
+
+    audited = audit_lines(client, original_resume=ORIGINAL, draft=line)
+    assert len(claim_lines(line)) == 1
+    assert audited[0].support == 0.10
+    assert audited[0].failing_claim is not None
+    assert "90%" in audited[0].failing_claim

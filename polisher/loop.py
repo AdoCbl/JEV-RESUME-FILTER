@@ -62,27 +62,41 @@ def attempt_history(rounds: list[Round] | tuple[Round, ...]) -> str | None:
 
 
 def rejected_phrasings(
-    rounds: list[Round] | tuple[Round, ...], best: Round | None, limit: int = 6
+    rounds: list[Round] | tuple[Round, ...],
+    best: Round | None,
+    extra: list[str] | None = None,
+    limit: int = 6,
 ) -> str | None:
-    """Phrasings the reviewer rejected in attempts that lost, so the writer stops reusing them."""
-    seen: list[str] = []
+    """Phrasings JEV or a human reviewer rejected, so the writer does not repeat them.
+
+    ``extra`` holds lines a human explicitly rejected during a live run; those are
+    permanent for the run and prepended so they lead the writer's instruction.
+    """
+    human = list(extra or [])
+    jev: list[str] = []
     for round_ in reversed(tuple(rounds)):
         if round_ is best:
             continue
         for line in round_.review.lines_to_review():
-            if line.text not in seen:
-                seen.append(line.text)
-            if len(seen) == limit:
+            if line.text not in human and line.text not in jev:
+                jev.append(line.text)
+            if len(jev) == limit:
                 break
-        if len(seen) == limit:
+        if len(jev) == limit:
             break
+    seen = human + jev
     if not seen:
         return None
+    attribution = []
+    if human:
+        attribution.append(f"{len(human)} rejected by a human")
+    if jev:
+        attribution.append(f"{len(jev)} by JEV in prior rounds")
+    lines = [f"  - {t}" for t in seen]
     return (
         "## PHRASINGS THE REVIEWER REJECTED IN EARLIER ATTEMPTS\n"
-        "Each line below was judged unsupported or weak in an attempt that scored lower than "
-        "the current best draft. Do not reuse its wording: rewrite the line from the original "
-        "resume, or drop the claim.\n" + "\n".join(f"  - {text}" for text in seen)
+        "Do not reuse these wordings. Rewrite each from the original resume or drop the claim."
+        f" ({', '.join(attribution)})\n" + "\n".join(lines)
     )
 
 
@@ -111,10 +125,14 @@ def polish(
     job_description: str,
     on_round: RoundObserver | None = None,
     prior_rounds: list[Round] | None = None,
+    human_rejections: Callable[[], list[str]] | None = None,
+    reviewer: TypeSafeClient | None = None,
 ) -> PolisherRun:
     """Write, review, keep the best, feed the review back, and stop when it stops paying.
 
     Pass ``prior_rounds`` to resume from a previously interrupted run.
+    Pass ``human_rejections`` to include lines a person rejected during a live run in the
+    writer's instruction block every round; those rejections are permanent for the run.
     """
     import time as _time
 
@@ -128,7 +146,7 @@ def polish(
         for r in rounds
     )
 
-    reviewer = TypeSafeClient(**settings.typesafe_client_kwargs())
+    reviewer = reviewer or TypeSafeClient(**settings.typesafe_client_kwargs())
 
     with OpenAI(
         api_key=settings.writer_api_key,
@@ -154,6 +172,9 @@ def polish(
             carried = (
                 None if base is None else {line.text: line.support for line in base.review.lines}
             )
+            # Evidence (source line mappings) is also carried for unchanged lines.
+            carried_evidence = None if base is None else base.review.evidence
+            extra_rejected = human_rejections() if human_rejections is not None else []
             draft = write_draft(
                 writer,
                 model=settings.writer_model,
@@ -162,7 +183,7 @@ def polish(
                 base_draft=None if base is None else base.draft.text,
                 feedback=None if base is None else base.review.feedback(),
                 history=attempt_history(rounds),
-                rejected=rejected_phrasings(rounds, base),
+                rejected=rejected_phrasings(rounds, base, extra=extra_rejected),
             )
 
             if base is not None and draft.text == base.draft.text:
@@ -175,6 +196,7 @@ def polish(
                     job_description=job_description,
                     draft=draft.text,
                     carried=carried,
+                    carried_evidence=carried_evidence,
                 )
                 reviewed = True
                 improvement = None if best is None else review.overall - best.review.overall

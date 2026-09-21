@@ -108,3 +108,32 @@ def test_run_id_in_payload() -> None:
         run_id="my-run-123",
     )
     assert payload["manifest"]["run_id"] == "my-run-123"
+
+
+def test_ledger_and_trust_come_from_the_same_audit() -> None:
+    """The page shows the distribution the run paid for, so the numbers must agree."""
+    from polisher import judge
+
+    run, s = _one_round_run()
+    payload = build_report(
+        settings=s, resume=RESUME, job_description=JD,
+        paths={}, rounds=run.rounds, best=run.best,
+        stop_reason=run.stop_reason, status="done",
+    )
+    review = payload["versions"][1]["review"]
+    assert review["ledger"], "the ledger is what the page shows instead of a lone mean"
+    assert review["trust"]["audited"] == len(review["ledger"])
+    assert review["trust"]["unsupported"] == len(review["flagged_lines"])
+    assert payload["config"]["line_review_floor"] == judge.LINE_REVIEW_FLOOR
+
+
+def test_every_ledger_line_carries_its_claims() -> None:
+    run, s = _one_round_run()
+    payload = build_report(
+        settings=s, resume=RESUME, job_description=JD,
+        paths={}, rounds=run.rounds, best=run.best,
+        stop_reason=run.stop_reason, status="done",
+    )
+    for entry in payload["versions"][1]["review"]["ledger"]:
+        assert entry["claims"], "a line with no claim breakdown hides where the risk is"
+        assert all(0.0 <= claim["support"] <= 1.0 for claim in entry["claims"])

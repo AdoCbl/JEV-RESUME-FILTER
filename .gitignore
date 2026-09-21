@@ -21,6 +21,11 @@ build/
 !.env.example
 secrets.toml
 
+# Run artifacts. A round file holds the draft and the reviewer's line-by-line verdicts, so
+# this directory can contain a real resume and must never be committed.
+runs/
+UNRESOLVED.md
+
 # Testing
 .pytest_cache/
 .coverage

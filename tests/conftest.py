@@ -84,6 +84,10 @@ class FakeTypeSafeClient:
                 resolved[key] = FakeNoul(0.1)
             elif key.startswith("claim_"):
                 resolved[key] = FakeNoul(0.1)
+            elif key.startswith("src_"):
+                resolved[key] = FakeChoice(choice="none")
+            elif key.startswith("cov_"):
+                resolved[key] = FakeChoice(choice="none")
             elif key == "biggest_gap":
                 resolved[key] = FakeChoice()
             else:
