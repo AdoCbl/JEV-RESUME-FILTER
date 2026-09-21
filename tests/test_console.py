@@ -105,3 +105,77 @@ def test_print_round_shows_round_number() -> None:
 
     out = _capture(console.print_round, run.rounds[0], s)
     assert "Round 1" in out
+
+
+# ── With a page up, the terminal is a progress log ────────────────────────────
+
+
+def _one_round_run():
+    from unittest.mock import patch
+
+    from polisher.loop import polish
+    from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
+
+    s = _settings()
+    with (
+        patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
+        patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
+    ):
+        run = polish(s, "resume text", "jd text")
+    return run, s
+
+
+def _payload(run, settings):
+    from polisher.report import build_report
+
+    return build_report(
+        settings=settings,
+        resume="resume text",
+        job_description="jd text",
+        paths={"resume": "r.txt", "job_description": "jd.txt", "out": "out.txt"},
+        rounds=run.rounds,
+        best=run.best,
+        stop_reason=run.stop_reason,
+        status="done",
+    )
+
+
+def test_a_round_is_one_line_when_the_page_will_show_it() -> None:
+    from polisher import console
+
+    run, s = _one_round_run()
+    out = _capture(console.print_round, run.rounds[0], s, verbose=False)
+
+    assert out.count("\n") == 1
+    assert "round 1/5" in out
+    assert "overall" in out and "grounded" in out
+    # No per-dimension bars, no fabrication table: that is the page's job.
+    assert "█" not in out
+    assert "fabrication" not in out
+
+
+def test_the_result_points_at_the_page_instead_of_repeating_it() -> None:
+    from polisher import console
+
+    run, s = _one_round_run()
+    out = _capture(
+        console.print_result, _payload(run, s), "http://127.0.0.1:8765", verbose=False
+    )
+
+    assert "http://127.0.0.1:8765" in out
+    assert "best draft" in out
+    assert "Run totals" not in out, "cost per round and totals live on the page"
+
+
+def test_without_a_page_the_terminal_still_reports_everything() -> None:
+    from polisher import console
+
+    run, s = _one_round_run()
+    payload = _payload(run, s)
+
+    result = _capture(console.print_result, payload, None, verbose=True)
+    assert "Run totals" in result
+    assert "Total tokens:" in result
+
+    block = _capture(console.print_round, run.rounds[0], s, verbose=True)
+    assert "fabrication" in block

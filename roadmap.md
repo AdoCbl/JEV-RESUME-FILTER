@@ -48,6 +48,20 @@ directly; nothing ran the command the README opens with. The flag has its own na
 run now continues in the directory it came from rather than opening a second one beside it, and
 three tests cover the default path, the flag, and the round trip.
 
+**The page opens itself, and the terminal stopped competing with it.** Interaction and
+visualisation are the page's job, so `uv run main.py` opens the report in the browser as soon
+as the server is listening instead of printing a URL for someone to copy — and stops printing
+the tables the page already draws. Two consequences followed:
+
+- The page is opened before round 1 exists, so it had to learn that an empty payload means
+  *starting*, not *done*: it keeps polling until there is something to show, and lands on the
+  best draft the first time a payload arrives. It used to sit on the original forever, which is
+  what the new browser test catches.
+- The terminal is now a progress log while the page is up: one line per round, then a short
+  result that names the best draft, the stop reason, the cost, and anything still unsupported.
+  With `--no-serve` it keeps the full per-round breakdown, because then it is the only view of
+  the run there is.
+
 **Docs match the code.** `--out` was missing from the flag table, the page's lack of auth was
 undocumented (`--host 0.0.0.0` exposes a resume, now stated in the README), and
 `docs/data-flow.md` did not mention the live check that sends an edited draft to JEV, or the

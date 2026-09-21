@@ -10,6 +10,7 @@ import logging
 import shutil
 import sys
 import threading
+import webbrowser
 from dataclasses import replace
 from pathlib import Path
 
@@ -83,6 +84,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--report-json", type=Path, default=None, help="write the run payload here")
     parser.add_argument("--serve-report", type=Path, default=None, help="serve a saved payload")
     parser.add_argument("--no-serve", dest="serve", action="store_false", help="skip the report page")
+    parser.add_argument(
+        "--no-open",
+        dest="open_page",
+        action="store_false",
+        help="serve the report page but do not open a browser at it",
+    )
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument(
@@ -102,6 +109,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def open_report(url: str) -> None:
+    """Open the run's page in the default browser.
+
+    Nobody reads a URL out of a terminal before the run finishes — by then the page has two
+    rounds of context in it — so the run opens it. A machine with no browser (a server, a
+    container, CI) simply returns False, and that is not worth failing a run over.
+    """
+    try:
+        webbrowser.open(url)
+    except Exception:  # noqa: BLE001 - a missing desktop session is not a run failure
+        pass
+
+
 def serve_saved(args: argparse.Namespace) -> None:
     try:
         payload = json.loads(args.serve_report.read_text())
@@ -111,6 +131,8 @@ def serve_saved(args: argparse.Namespace) -> None:
     state.set_report(payload)
     url = server.url(server.start(state, host=args.host, port=args.port), args.host)
     print(f"  Report:    {url}  ({args.serve_report}, Ctrl-C to stop)")
+    if args.open_page:
+        open_report(url)
     server.wait()
 
 
@@ -225,7 +247,11 @@ def _run_one(
                 state.saved_index = saved_index
         if store and directory is not None:
             save_round(current, directory)
-        console.print_round(current, settings, saved_path=out if current is best else None)
+        # With a page up, the terminal is a progress log: the scores and the flagged lines
+        # are on the page, and printing them twice does not help anyone.
+        console.print_round(
+            current, settings, saved_path=out if current is best else None, verbose=url is None
+        )
         if state is not None:
             state.set_report(snapshot(rounds, best, status="running"))
         _log.info("round", extra={"run_id": run_id, "round": current.number,
@@ -251,7 +277,7 @@ def _run_one(
     payload = snapshot(run.rounds, run.best, status="done", stop_reason=run.stop_reason)
     if state is not None:
         state.set_report(payload)
-    console.print_result(payload, url=url)
+    console.print_result(payload, url=url, verbose=url is None)
 
     if report_json is not None and not settings.no_store:
         report_json.write_text(json.dumps(payload, indent=2) + "\n")
@@ -529,6 +555,10 @@ def main(argv: list[str] | None = None) -> None:
         else:
             url = server.url(httpd, args.host)
             console.print_server(url)
+            # The page is served before the first round lands; it polls until there is
+            # something to show, so opening it now is safe.
+            if args.open_page:
+                open_report(url)
     else:
         shared_reviewer = None
 

@@ -1,4 +1,11 @@
-"""The terminal view of a run: the header, one block per round, and the result."""
+"""The terminal view of a run: the header, one line per round, and the result.
+
+The page is where a run is read and steered — scores, the ledger, the coverage matrix, the
+approve/reject decisions. So while the page is being served the terminal stays a progress
+log: one line per round, and a short result that points at the page. With ``--no-serve``
+there is no page, and the terminal falls back to the full breakdown, because it is then the
+only view of the run there is.
+"""
 
 from pathlib import Path
 from typing import Any
@@ -51,8 +58,17 @@ def print_server_unavailable(port: int, reason: str) -> None:
     )
 
 
-def print_round(current: Round, settings: Settings, saved_path: Path | None = None) -> None:
-    """One round as it finishes, so a long run can be watched."""
+def print_round(
+    current: Round,
+    settings: Settings,
+    saved_path: Path | None = None,
+    *,
+    verbose: bool = True,
+) -> None:
+    """One round as it finishes: a line when the page will show it, a block when nothing will."""
+    if not verbose:
+        print(_round_line(current, settings, saved_path))
+        return
     review = current.review
     delta = "first draft" if current.improvement is None else f"{current.improvement:+.2f} vs best"
     print(f"\n  ── Round {current.number} of {settings.max_iterations} " + _RULE * 36)
@@ -106,11 +122,52 @@ def print_round(current: Round, settings: Settings, saved_path: Path | None = No
         print(f"       saved              {saved_path} (new best draft)")
 
 
-def print_result(report: dict[str, Any], url: str | None = None) -> None:
+def _round_line(current: Round, settings: Settings, saved_path: Path | None) -> str:
+    """The one line a round gets when the page is the place it will be read."""
+    review = current.review
+    delta = "first draft" if current.improvement is None else f"{current.improvement:+.2f}"
+    flagged = len(review.flagged_lines)
+    parts = [
+        f"  round {current.number}/{settings.max_iterations}",
+        f"overall {review.overall:.2f} ({delta})",
+        f"quality {review.quality:.2f}",
+        f"grounded {review.groundedness:.2f}",
+        "nothing flagged" if not flagged else f"{flagged} flagged",
+    ]
+    if not current.reviewed:
+        parts.append("writer unchanged")
+    if saved_path is not None:
+        parts.append("new best")
+    return "   ".join(parts)
+
+
+def print_result(report: dict[str, Any], url: str | None = None, *, verbose: bool = True) -> None:
     """The end-of-run summary, read from the same payload the page renders."""
     versions = report["versions"]
     best = None if report["best_index"] is None else versions[report["best_index"]]
     totals = report["totals"]
+
+    if not verbose:
+        print()
+        if best is not None:
+            review = best["review"]
+            print(
+                f"  Done — {best['label']} is the best draft: overall {review['overall']:.2f}"
+                f" (quality {review['quality']:.2f}, grounded {review['groundedness']:.2f})"
+            )
+            print(f"  Stopped:     {report['stop_reason']}")
+            print(
+                f"  {len(versions) - 1} rounds · {totals['total_tokens']:,} tokens ·"
+                f" {totals['seconds']:,.0f}s · wrote {report['paths']['out']}"
+            )
+            if review["flagged_lines"]:
+                print(
+                    f"  ⚠  {len(review['flagged_lines'])} unsupported line(s) in the winning"
+                    " draft — decide them on the page before using this resume."
+                )
+        if url:
+            print(f"  Report:      {url}  (still serving; Ctrl-C to stop)")
+        return
 
     print(f"\n{'═' * WIDTH}")
     print("  Result")

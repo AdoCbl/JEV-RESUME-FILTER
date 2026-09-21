@@ -138,8 +138,11 @@ The same entry point is installed as `resume-polisher`, so every flag below work
 The defaults are the files in `example/` (``resume.txt``, ``job_description.txt``,
 ``polished_resume.txt``); replace them with your own, or pass paths.
 
-Each round prints its dimension scores, guardrail probabilities, the lines JEV could not
-support, and the biggest gap. The run ends with the winning round and a token/latency total.
+The run serves the report page and **opens it in your browser**. That page is where the
+run is read and steered — scores, the claim ledger, the coverage matrix, per-round cost, the
+approve/reject decisions, and editing a draft. The terminal prints the header, one line per
+round, and a short result; with `--no-serve` there is no page, so it prints the full
+per-round breakdown instead, because it is then the only view of the run there is.
 
 | Flag | What it does |
 |---|---|
@@ -147,6 +150,7 @@ support, and the biggest gap. The run ends with the winning round and a token/la
 | `--port N` | port for the report page (default `8765`) |
 | `--host H` | bind address (default `127.0.0.1`) |
 | `--no-serve` | skip the page and just run the loop |
+| `--no-open` | serve the page but do not open a browser at it |
 | `--report-json PATH` | write the run payload for later, or for another tool |
 | `--serve-report PATH` | skip the run and serve a payload written earlier |
 | `--max-iterations N` | override the round ceiling |
@@ -225,8 +229,9 @@ own.
 
 ## Report page
 
-Every run serves a live page at `http://127.0.0.1:8765`. Rounds appear as they finish,
-so a long run can be watched instead of scrolled.
+Every run serves a live page at `http://127.0.0.1:8765` and opens it in your browser. Rounds
+appear as they finish, so a long run can be watched instead of waited for; `--no-open` serves
+it without opening anything.
 
 - **Versions** — the original plus every round, each with its overall score.
 - **Undo / Next** — step through the versions, with `←` and `→`; the timeline chips do
@@ -275,7 +280,8 @@ polisher/
   metrics.py        per-call latency and token records
   diff.py           line diffs between versions, for both views
   report.py         the single run payload every view reads
-  console.py        the terminal view
+  console.py        the terminal view: a progress log while the page is up, the full
+                    breakdown when --no-serve leaves the terminal as the only view
   page.py           the HTML view: scores, ledger, coverage, diffs, and the edit surface
   server.py         the local server: the page, the payload, decisions, saving, live checks
   cli.py            argument parsing and the wiring between all of the above

@@ -689,13 +689,19 @@ function renderTimeline() {
 function render() {
   const r = state.report;
   const cfg = r.config || {};
-  const live = r.status === "running";
-  $("status").textContent = live ? "running" : "done";
-  $("status").className = "badge" + (live ? " live" : "");
+  // The page is opened as soon as the server is listening, which can be before the first
+  // payload exists. That state is "starting", not "done" — and it has to keep polling, or
+  // the browser would sit on an empty page for the whole run.
+  const waiting = !r.status && !versions().length;
+  const live = r.status === "running" || waiting;
+  $("status").textContent = waiting ? "starting…" : live ? "running" : "done";
+  $("status").className = "badge" + (live && !waiting ? " live" : "");
   $("paths").textContent = (r.paths ? `${r.paths.resume} → ${r.paths.out}` : "");
-  $("stop").textContent = live
-    ? `round ${versions().length} running…`
-    : (r.stop_reason || "");
+  $("stop").textContent = waiting
+    ? "waiting for the first round…"
+    : live
+      ? `round ${versions().length} running…`
+      : (r.stop_reason || "");
   $("jd").textContent = r.job_description || "";
   $("footer").innerHTML = `<div>writer ${esc(cfg.writer_model || "")} · reviewer
     ${esc(cfg.reviewer_model || "")} · stop when a round beats the best by less than
@@ -790,13 +796,21 @@ async function refresh() {
   try {
     const res = await fetch("/api/report", { cache: "no-store" });
     if (res.ok) {
+      const firstPaint = !versions().length;
       state.report = await res.json();
-      // Follow the newest round while the run is live, until the reader navigates.
-      if (!state.touched && state.report.status === "running") {
-        state.index = Math.max(0, versions().length - 1);
+      const newest = Math.max(0, versions().length - 1);
+      // Follow the newest round while the run is live, until the reader navigates. The first
+      // payload after an empty page lands on the best draft: this page is opened before round
+      // 1 normally, and it must not sit on the original once there is something to show.
+      if (!state.touched && (state.report.status === "running" || firstPaint)) {
+        state.index = state.report.status === "running"
+          ? newest
+          : (state.report.best_index ?? newest);
       }
       render();
-      if (state.report.status === "running") setTimeout(refresh, 1500);
+      // Keep polling while the run is live, and while nothing has been published yet: the
+      // page can be open before the first round lands.
+      if (state.report.status === "running" || !versions().length) setTimeout(refresh, 1500);
     }
   } catch (error) { /* the server went away; keep the last paint */ }
 }

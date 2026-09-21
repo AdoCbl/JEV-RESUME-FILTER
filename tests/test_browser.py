@@ -407,6 +407,30 @@ def test_a_line_with_no_source_says_so(page: Page, tmp_path: Path) -> None:
         httpd.shutdown()
 
 
+def test_a_page_opened_before_the_first_round_fills_itself_in(page: Page, tmp_path: Path) -> None:
+    """The run opens the page as soon as the server is listening, which can be before round 1.
+
+    A page that read an empty payload as "the run is over" would sit blank for the whole
+    run, which is exactly how it would look if opening were left until the end.
+    """
+    from polisher.server import ReportState, start
+
+    state = ReportState(output_path=tmp_path / "out.txt")
+    state.set_report({})  # listening, nothing published yet
+    httpd = start(state, host="127.0.0.1", port=0)
+    try:
+        page.goto(f"http://127.0.0.1:{httpd.server_port}")
+        page.wait_for_selector("#status", timeout=3000)
+        assert "starting" in page.locator("#status").inner_text()
+        assert "waiting for the first round" in page.locator("#stop").inner_text()
+
+        state.set_report(_make_report("Built an API."))
+        page.wait_for_selector("#ledger .ledger li", timeout=8000)
+        assert page.locator("#status").inner_text() == "done"
+    finally:
+        httpd.shutdown()
+
+
 def test_the_page_never_scrolls_sideways(page: Page, tmp_path: Path) -> None:
     """The two-column layout has to fold into one without pushing the page wide."""
     from polisher.server import ReportState, start

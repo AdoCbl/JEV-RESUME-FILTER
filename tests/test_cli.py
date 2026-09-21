@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -330,6 +331,63 @@ def test_resume_without_saved_rounds_says_which_directory(tmp_path: Path, monkey
             [str(resume), str(jd), "--out", str(out), "--no-serve",
              "--secrets", str(_write_secrets(tmp_path)), "--resume", str(empty)]
         )
+
+
+# ── The page opens by itself ──────────────────────────────────────────────────
+
+
+def _serve_run(tmp_path: Path, monkeypatch, extra: list[str], opened: list[str]) -> None:
+    """Run the tool with the page served, without opening a real browser and without blocking."""
+    from polisher.cli import main
+    from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
+
+    monkeypatch.setattr("polisher.runs.RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr("polisher.server.wait", lambda: None)
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
+    resume, jd, out = _inputs(tmp_path)
+    with (
+        patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
+        patch("typesafe_sdk.TypeSafeClient", return_value=FakeTypeSafeClient()),
+        patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
+    ):
+        main(
+            [str(resume), str(jd), "--out", str(out), "--port", "0",
+             "--secrets", str(_write_secrets(tmp_path)), *extra]
+        )
+
+
+def test_the_run_opens_the_report_page(tmp_path: Path, monkeypatch) -> None:
+    """Nobody reads a URL out of a terminal before the run ends; the run opens the page."""
+    opened: list[str] = []
+    _serve_run(tmp_path, monkeypatch, [], opened)
+
+    assert opened, "the run did not open its page"
+    assert opened[0].startswith("http://127.0.0.1:")
+
+
+def test_no_open_serves_without_a_browser(tmp_path: Path, monkeypatch) -> None:
+    opened: list[str] = []
+    _serve_run(tmp_path, monkeypatch, ["--no-open"], opened)
+
+    assert opened == []
+
+
+def test_serve_report_opens_the_saved_page(tmp_path: Path, monkeypatch) -> None:
+    from polisher.cli import main
+
+    opened: list[str] = []
+    monkeypatch.setattr("polisher.server.wait", lambda: None)
+    monkeypatch.setattr("webbrowser.open", lambda url: opened.append(url) or True)
+
+    payload = tmp_path / "payload.json"
+    payload.write_text(json.dumps({"status": "done", "versions": [], "totals": {}}))
+
+    main(["--serve-report", str(payload), "--port", "0"])
+    assert opened and opened[0].startswith("http://127.0.0.1:")
+
+    opened.clear()
+    main(["--serve-report", str(payload), "--port", "0", "--no-open"])
+    assert opened == []
 
 
 # ── Packaging ─────────────────────────────────────────────────────────────────
