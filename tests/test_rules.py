@@ -2,8 +2,20 @@ from pathlib import Path
 
 import pytest
 
-from polisher.rules_builtin import BUILTIN_RULEBOOK, iter_prompt_directives, render_writer_system_prompt
-from polisher.rules import PRECEDENCE_ORDER, Rule, RuleBook, dump_rules_toml, format_ledger, load_rules, run_code_check
+from polisher.rules import (
+    PRECEDENCE_ORDER,
+    Rule,
+    RuleBook,
+    dump_rules_toml,
+    format_ledger,
+    load_rules,
+    run_code_check,
+)
+from polisher.rules_builtin import (
+    BUILTIN_RULEBOOK,
+    iter_prompt_directives,
+    render_writer_system_prompt,
+)
 from polisher.writer import SYSTEM_PROMPT
 
 

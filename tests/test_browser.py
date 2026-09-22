@@ -448,6 +448,8 @@ def test_scores_show_the_verdict_band_without_recomputed_rows(page: Page, tmp_pa
 
         assert "Needs your review" in scores
         assert "target 0.90" in scores
+        assert "active rules" in scores.lower()
+        assert "job fit" in scores.lower()
         assert "grounded = 1" not in scores
         assert "mean line grounding" not in checks
         assert "fabrication risk" not in checks

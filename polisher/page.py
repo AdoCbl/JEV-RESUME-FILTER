@@ -222,6 +222,22 @@ details[open] > summary .caret::before{content:"▾"}
 .hero-trust .unsupported b{color:var(--pink-ink)}
 .hero-trust .uncertain b{color:var(--magenta-ink)}
 .hero-trust .carried b{color:var(--sage-ink)}
+.focus-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;
+  margin-top:20px}
+.focus-card{padding:14px;border:2px solid var(--ink);box-shadow:4px 4px 0 var(--ink);
+  background:var(--paper)}
+.focus-card.sage{background:rgba(171,186,185,.22)}
+.focus-card.pink{background:rgba(243,134,161,.18)}
+.focus-card.magenta{background:rgba(212,91,178,.14)}
+.focus-card.grey{background:var(--grey-2)}
+.focus-kicker{font:400 10.5px/1.5 var(--mono);letter-spacing:.06em;text-transform:capitalize;
+  color:var(--mute)}
+.focus-value{margin-top:8px;color:var(--ink);font-size:24px;line-height:1.08;
+  letter-spacing:-.02em}
+.focus-detail{margin-top:8px;font-size:13.5px;line-height:1.5;color:var(--ink-2)}
+.focus-list{margin:11px 0 0;padding-left:18px}
+.focus-list li{margin:0 0 8px;font:400 11px/1.55 var(--mono);color:var(--ink-2)}
+.focus-list li:last-child{margin-bottom:0}
 
 /* ── Rulebook: every rule, its state, and waivers ─────────────────────────── */
 .rulebook{padding:0}
@@ -501,10 +517,11 @@ const spaced = (name) => String(name).replace(/_/g, " ");
 const ACRONYMS = { jd: "JD", api: "API" };
 const words = (name) => spaced(name).split(" ")
   .map((word) => ACRONYMS[word] || word).join(" ");
+const plural = (count, singular, pluralWord) => `${count} ${count === 1 ? singular : (pluralWord || singular + "s")}`;
 
 // Folded windows the reader opened. Every window is rebuilt from scratch on each poll, so
 // the open state has to live out here or a live run would keep shutting them.
-const _open = { rules:true, ledger:true, coverage:true, totals:false };
+const _open = { dimensions:false, fabrication:false, rules:true, ledger:true, coverage:true, totals:false };
 function foldWindow(id, title, meta, body, tone) {
   return `<details class="win${tone ? " " + tone : ""}" data-fold="${id}"${
     _open[id] ? " open" : ""}>
@@ -605,6 +622,27 @@ function verdictSummary(version, overall) {
   };
 }
 
+function blockingRuleTexts(review) {
+  const rules = ((state.report.rules || {}).items) || [];
+  const byId = {};
+  rules.forEach((rule) => { byId[rule.id] = rule; });
+  return (review.violations || [])
+    .filter((entry) => byId[entry.id] && byId[entry.id].severity === "blocking")
+    .map((entry) => byId[entry.id].text);
+}
+
+function focusCard(title, value, detail, items, tone) {
+  const list = items && items.length
+    ? `<ul class="focus-list">${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`
+    : "";
+  return `<div class="focus-card ${tone || "grey"}">
+    <div class="focus-kicker">${esc(title)}</div>
+    <div class="focus-value">${esc(value)}</div>
+    <div class="focus-detail">${esc(detail)}</div>
+    ${list}
+  </div>`;
+}
+
 function renderScores() {
   const el = $("scores");
   const version = current();
@@ -632,6 +670,18 @@ function renderScores() {
     : esc(words(review.biggest_gap));
   const trust = review.trust || {};
   const verdict = verdictSummary(version, overall);
+  const blocking = blockingRuleTexts(review);
+  const coverage = review.coverage || [];
+  const answered = coverage.filter((entry) => entry.draft_line).length;
+  const missingCoverage = coverage.filter((entry) => !entry.draft_line).map((entry) => entry.requirement);
+  const posting = review.posting || state.report.posting || {};
+  const supportedMissing = (((posting.keywords || {}).supported_missing) || []);
+  const lowConfidence = review.low_confidence || [];
+  const rules = ((state.report.rules || {}).items) || [];
+  const sourceCounts = rules.reduce((counts, rule) => {
+    counts[rule.source] = (counts[rule.source] || 0) + 1;
+    return counts;
+  }, {});
   const weakest = review.weakest_line
     ? `<span class="weakest">weakest line · ${review.weakest_line.support.toFixed(2)} · ${
         esc(review.weakest_line.text)}</span>`
@@ -639,6 +689,59 @@ function renderScores() {
   const best = review.is_best ? `<span class="tag">best</span>` : "";
   const blocked = review.blocked ? `<span class="tag bad">blocked</span>` : "";
   const carried = version.reviewed ? "" : "unchanged from the previous round";
+  const nextItems = [];
+  let nextMove = `Raise ${words(review.biggest_gap)}`;
+  let nextDetail = "the page leads with the one change that moves the draft forward";
+  let nextTone = "magenta";
+  if (review.blocked) {
+    nextMove = "Fix unsupported lines";
+    nextDetail = "grounding gates polish: evidence has to be true before wording can win";
+    nextTone = "pink";
+    if (review.weakest_line) {
+      nextItems.push(`weakest line ${review.weakest_line.support.toFixed(2)} · ${review.weakest_line.text}`);
+    }
+  } else if (blocking.length) {
+    nextMove = "Clear blocking rules";
+    nextDetail = "customer and general policy failures stop a save even when the score is high";
+    nextTone = "pink";
+    nextItems.push(...blocking.slice(0, 2));
+  } else {
+    if (lowConfidence.length) {
+      nextItems.push(`make ${words(lowConfidence[0])} easier to judge`);
+    }
+    if (supportedMissing.length) {
+      nextItems.push(`name supported term: ${supportedMissing[0]}`);
+    }
+  }
+  const ruleValue = `${sourceCounts.user || 0} customer · ${sourceCounts.builtin || 0} general`;
+  const ruleDetail = sourceCounts.job
+    ? `${sourceCounts.job} job-specific rules are active too`
+    : "customer rules run beside the built-in rulebook";
+  const ruleItems = rules.slice(0, 2).map((rule) => `${rule.source} · ${rule.text}`);
+  const proofValue = `${plural(trust.unsupported || 0, "unsupported line")} · ${plural(blocking.length, "blocking rule")}`;
+  const proofDetail = (trust.unsupported || 0) || blocking.length
+    ? "trust still needs a decision before this draft is truly shippable"
+    : "nothing blocking remains in the current best draft";
+  const proofItems = [];
+  if (review.flagged_lines && review.flagged_lines.length) {
+    proofItems.push(...review.flagged_lines.slice(0, 2));
+  }
+  if (!proofItems.length && blocking.length) {
+    proofItems.push(...blocking.slice(0, 2));
+  }
+  const fitValue = coverage.length
+    ? `${answered}/${coverage.length} requirements answered`
+    : "no JD requirements extracted";
+  const fitDetail = supportedMissing.length
+    ? "the source resume supports these missing terms; wording can still get tighter"
+    : "job-fit evidence is shown as answered lines, not as ATS theater";
+  const fitItems = (supportedMissing.length ? supportedMissing : missingCoverage).slice(0, 2);
+  const focus = `<div class="focus-grid">${[
+    focusCard("next move", nextMove, nextDetail, nextItems, nextTone),
+    focusCard("active rules", ruleValue, ruleDetail, ruleItems, sourceCounts.user ? "sage" : "grey"),
+    focusCard("proof gate", proofValue, proofDetail, proofItems, ((trust.unsupported || 0) || blocking.length) ? "pink" : "sage"),
+    focusCard("job fit", fitValue, fitDetail, fitItems, (supportedMissing.length || missingCoverage.length) ? "magenta" : "sage"),
+  ].join("")}</div>`;
   el.innerHTML = `<div class="frame">
     <div class="hero-head">
       <span class="label hero-eyebrow">verdict ......</span>
@@ -663,7 +766,7 @@ function renderScores() {
       <span class="unsupported"><b>${trust.unsupported || 0}</b> unsupported</span>
       <span class="uncertain"><b>${trust.uncertain || 0}</b> uncertain</span>
       ${weakest}
-    </div>
+    </div>${focus}
   </div>`;
 }
 
@@ -672,16 +775,26 @@ function renderChecks() {
   const version = current();
   if (!version || !version.review) { el.innerHTML = ""; return; }
   const cfg = state.report.config || {};
-  el.innerHTML = `<div class="win magenta">
-      <div class="win-bar"><span class="t">dimensions</span>
-        <span class="r">weighted mean, each scored against a level of ${cfg.top_level}</span></div>
-      <div class="rows">${dimensionRows(version, previous())}</div>
-    </div>
-    <div class="win pink">
-      <div class="win-bar"><span class="t">fabrication checks</span>
-        <span class="r">one row per guardrail — the block line is ${(cfg.fabrication_block ?? 0.5).toFixed(2)}</span></div>
-      <div class="rows">${checkRows(version)}</div>
-    </div>`;
+  const review = version.review;
+  const lowConfidence = Object.values(review.scores || {})
+    .filter((score) => Number(score.confidence) < (cfg.confidence_floor ?? 0.6)).length;
+  const hotChecks = Object.values(review.guardrails || {})
+    .filter((probability) => Number(probability) >= (cfg.fabrication_block ?? 0.5)).length;
+  el.innerHTML = `${foldWindow(
+      "dimensions",
+      "dimension detail",
+      `${lowConfidence} low-confidence · weakest ${words(review.weakest_dimension || review.biggest_gap)}`,
+      `<div class="rows">${dimensionRows(version, previous())}</div>`,
+      "magenta",
+    )}
+    ${foldWindow(
+      "fabrication",
+      "fabrication detail",
+      `${hotChecks} over the block line · ${Object.keys(review.guardrails || {}).length} guardrails checked`,
+      `<div class="rows">${checkRows(version)}</div>`,
+      hotChecks ? "pink" : "grey",
+    )}`;
+  bindWindows(el);
 }
 
 function ruleStateWord(state_) {

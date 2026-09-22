@@ -34,8 +34,10 @@ nobody can source turns the places that need a decision pink.
 
 ## quickstart
 
-Python 3.14+ and [uv](https://docs.astral.sh/uv/). Two keys: [TypeSafe](https://console.typesafe.ai/keys)
-for JEV (the reviewer) and [DeepSeek](https://platform.deepseek.com/) for the writer.
+Python 3.14+ and [uv](https://docs.astral.sh/uv/). If you run the browser tests or check the
+embedded page script locally, use Node 24 (`nvm use` reads `.nvmrc`). Two keys:
+[TypeSafe](https://console.typesafe.ai/keys) for JEV (the reviewer) and
+[DeepSeek](https://platform.deepseek.com/) for the writer.
 
 ```bash
 uv sync
@@ -60,6 +62,7 @@ Then run it; the defaults are the sample files in `example/`, and every flag bel
 ```bash
 uv run main.py
 uv run main.py path/to/resume.txt path/to/job_description.txt --out polished_resume.txt
+uv run main.py path/to/resume.txt path/to/job_description.txt --rules customer-rules.toml
 ```
 
 The run serves the report page and **opens it in your browser**; the terminal keeps a

@@ -75,7 +75,7 @@ _UK_TO_US = {
     "optimisation": "optimization",
     "programme": "program",
 }
-_CODE_CHECKS: dict[str, Callable[..., "CodeCheckResult"]]
+_CODE_CHECKS: dict[str, Callable[..., CodeCheckResult]]
 
 
 @dataclass(frozen=True)
@@ -187,6 +187,21 @@ class RuleBook:
         return digest[:16]
 
 
+def compose_rulebooks(*rulebooks: RuleBook | None) -> RuleBook:
+    """Merge multiple rulebooks into one active rulebook.
+
+    Built-in guidance and customer rules should both apply to a run. Duplicate ids still fail:
+    a reader has to be able to tell which rule actually fired.
+    """
+
+    merged: list[Rule] = []
+    for rulebook in rulebooks:
+        if rulebook is None:
+            continue
+        merged.extend(rulebook.rules)
+    return RuleBook(rules=tuple(merged))
+
+
 def precedence_key(rule: Rule) -> tuple[int, int, int, str]:
     """Sort higher-precedence rules first, with stable ties by id."""
 
@@ -240,8 +255,8 @@ def dump_rules_toml(rulebook: RuleBook | tuple[Rule, ...] | list[Rule]) -> str:
     blocks: list[str] = []
     for rule in rules:
         blocks.append("[[rules]]")
-        for field in _FIELDS:
-            blocks.append(f"{field} = {json.dumps(getattr(rule, field))}")
+        for field_name in _FIELDS:
+            blocks.append(f"{field_name} = {json.dumps(getattr(rule, field_name))}")
         blocks.append("")
     return "\n".join(blocks).rstrip() + "\n"
 
@@ -355,13 +370,13 @@ def _parse_rule(index: int, entry: Any) -> Rule:
         raise RuleValidationError(f"{location}.{unknown[0]}: unknown field")
 
     values: dict[str, str] = {}
-    for field in _FIELDS:
-        if field not in entry:
-            raise RuleValidationError(f"{location}.{field}: missing field")
-        value = entry[field]
+    for field_name in _FIELDS:
+        if field_name not in entry:
+            raise RuleValidationError(f"{location}.{field_name}: missing field")
+        value = entry[field_name]
         if not isinstance(value, str):
-            raise RuleValidationError(f"{location}.{field}: expected a string")
-        values[field] = value.strip()
+            raise RuleValidationError(f"{location}.{field_name}: expected a string")
+        values[field_name] = value.strip()
 
     try:
         return Rule(
@@ -457,7 +472,9 @@ def _check_first_person(text: str) -> CodeCheckResult:
 
 def _check_us_spelling(text: str) -> CodeCheckResult:
     words = [word.lower() for word in re.findall(r"\b[A-Za-z]+\b", text)]
-    findings = tuple(dict.fromkeys(f"{word} -> {_UK_TO_US[word]}" for word in words if word in _UK_TO_US))
+    findings = tuple(
+        dict.fromkeys(f"{word} -> {_UK_TO_US[word]}" for word in words if word in _UK_TO_US)
+    )
     if findings:
         return CodeCheckResult(
             name="us_spelling",

@@ -108,7 +108,11 @@ def stop_reason(current: Round, settings: Settings, misses: int) -> str | None:
     loop tolerates ``settings.patience`` non-improving rounds before it stops.
     """
     review = current.review
-    if review.overall >= settings.target_score and not review.blocked and not review.blocking_violations:
+    if (
+        review.overall >= settings.target_score
+        and not review.blocked
+        and not review.blocking_violations
+    ):
         return f"target reached (overall {review.overall:.2f} >= {settings.target_score:.2f})"
     if misses >= settings.patience:
         last = current.improvement

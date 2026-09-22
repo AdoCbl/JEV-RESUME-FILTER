@@ -175,3 +175,10 @@ def test_template_contains_verdict_band_labels() -> None:
     assert "Ready to send" in _TEMPLATE
     assert "Needs your review" in _TEMPLATE
     assert "Not grounded" in _TEMPLATE
+
+
+def test_template_contains_focus_summary_labels() -> None:
+    assert "next move" in _TEMPLATE
+    assert "active rules" in _TEMPLATE
+    assert "proof gate" in _TEMPLATE
+    assert "job fit" in _TEMPLATE

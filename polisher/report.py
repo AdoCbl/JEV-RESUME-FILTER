@@ -14,8 +14,7 @@ from .config import Settings
 from .diff import Diff, line_diff
 from .judge import Review
 from .loop import Round
-from .rules import format_ledger
-from .rules import PRECEDENCE_ORDER, RuleBook, RuleResult
+from .rules import PRECEDENCE_ORDER, RuleBook, RuleResult, format_ledger
 from .rules_builtin import BUILTIN_RULEBOOK
 from .writer import SYSTEM_PROMPT
 

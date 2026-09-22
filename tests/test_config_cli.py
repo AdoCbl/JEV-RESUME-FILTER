@@ -123,6 +123,7 @@ def test_build_parser_defaults() -> None:
     parser = build_parser()
     args = parser.parse_args([])
     assert args.max_iterations is None
+    assert args.rules is None
     assert args.serve is True
     assert args.redact is False
     assert args.no_store is False
@@ -136,6 +137,7 @@ def test_build_parser_flags() -> None:
         "--max-iterations", "3",
         "--max-tokens", "50000",
         "--max-seconds", "120",
+        "--rules", "customer.toml",
         "--redact",
         "--no-store",
         "--no-serve",
@@ -144,6 +146,7 @@ def test_build_parser_flags() -> None:
     assert args.max_iterations == 3
     assert args.max_tokens == 50000
     assert args.max_seconds == 120.0
+    assert str(args.rules) == "customer.toml"
     assert args.redact is True
     assert args.no_store is True
     assert args.serve is False

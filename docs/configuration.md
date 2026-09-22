@@ -57,6 +57,7 @@ Every flag works as `uv run main.py â€¦` and as the installed `resume-polisher â
 | `--max-tokens N` | stop the loop once the run has spent N tokens |
 | `--max-seconds N` | stop the loop after N seconds |
 | `--secrets PATH` | a different secrets file |
+| `--rules RULES_TOML` | merge customer-specific rules with the built-in general rulebook |
 | `--resume RUN_DIR` | continue an interrupted run, adding to that run's own directory |
 | `--batch PAIRS_CSV` | run many pairs concurrently |
 | `--redact` | strip contact details before anything is sent to an API |

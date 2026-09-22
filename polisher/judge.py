@@ -448,7 +448,11 @@ def split_requirements(jd: str, limit: int = MAX_REQUIREMENTS) -> tuple[str, ...
     Only lines classified as requirements or responsibilities are candidates for the
     coverage matrix; boilerplate such as "About us" is kept out of it.
     """
-    return tuple(item["text"] for item in _posting_items(jd, limit) if item["section"] != "boilerplate")
+    return tuple(
+        item["text"]
+        for item in _posting_items(jd, limit)
+        if item["section"] != "boilerplate"
+    )
 
 
 def posting_report(
@@ -473,7 +477,9 @@ def posting_report(
         "requirements": relevant,
         "sections": {
             "requirements": [item["text"] for item in items if item["section"] == "requirements"],
-            "responsibilities": [item["text"] for item in items if item["section"] == "responsibilities"],
+            "responsibilities": [
+                item["text"] for item in items if item["section"] == "responsibilities"
+            ],
             "boilerplate": [item["text"] for item in items if item["section"] == "boilerplate"],
         },
         "keywords": {
@@ -523,7 +529,10 @@ def _posting_section_for_line(line: str, current_section: str) -> str:
         return current_section
     if lowered.startswith(_POSTING_BOILERPLATE_PREFIXES):
         return "boilerplate"
-    if any(token in lowered for token in ("responsible for", "you will", "build", "design", "lead ")):
+    if any(
+        token in lowered
+        for token in ("responsible for", "you will", "build", "design", "lead ")
+    ):
         return "responsibilities"
     return "requirements"
 

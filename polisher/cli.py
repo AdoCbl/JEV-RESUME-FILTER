@@ -24,6 +24,8 @@ from .audit import AuditLog, write_unresolved
 from .config import DEFAULT_HOST, DEFAULT_PORT
 from .loop import Round, polish
 from .redact import redact as redact_text
+from .rules import RuleBook, RuleValidationError, compose_rulebooks, load_rules
+from .rules_builtin import BUILTIN_RULEBOOK
 from .runs import ProviderError, load_rounds, new_run_id, run_dir, save_round, write_manifest
 
 EXAMPLE = Path("example")
@@ -79,6 +81,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out", default=EXAMPLE / "polished_resume.txt", type=Path)
     parser.add_argument("--secrets", default=Path("secrets.toml"), type=Path)
+    parser.add_argument(
+        "--rules",
+        type=Path,
+        default=None,
+        metavar="RULES_TOML",
+        help="apply these customer rules beside the built-in general rulebook",
+    )
     parser.add_argument("--max-iterations", type=int, default=None)
     parser.add_argument("--max-tokens", type=int, default=None, help="total token budget (writer+reviewer)")
     parser.add_argument("--max-seconds", type=float, default=None, help="wall-clock budget in seconds")
@@ -243,11 +252,12 @@ def _run_one(
     human_rejections=None,  # Callable[[], list[str]] | None
     reviewer=None,  # TypeSafeClient | None — shared with server for /api/check
     store_dir: Path | None = None,  # a resumed run writes back into its own directory
+    rulebook: RuleBook | None = None,
 ) -> dict:
     """Run the polish loop for one (resume, job_description) pair and return the payload."""
     directory = (store_dir or run_dir(run_id)) if store else None
     if directory is not None:
-        mf = report_module.build_manifest(settings, run_id=run_id)
+        mf = report_module.build_manifest(settings, run_id=run_id, rulebook=rulebook)
         write_manifest(directory, mf)
 
     paths = {
@@ -275,6 +285,7 @@ def _run_one(
             status=status,
             saved_index=state.saved_index if state is not None else saved_index,
             run_id=run_id,
+            rulebook=rulebook,
         )
 
     if state is not None:
@@ -306,6 +317,7 @@ def _run_one(
             on_round=on_round, prior_rounds=prior_rounds,
             human_rejections=human_rejections,
             reviewer=reviewer,
+            rulebook=rulebook,
         )
     except (TypeSafeAPIError, OpenAIError) as exc:
         provider_err = (
@@ -426,7 +438,7 @@ tr:hover{{background:rgba(255,255,255,.03)}}
     path.write_text(html)
 
 
-def run_batch(args: argparse.Namespace, settings: config.Settings) -> None:
+def run_batch(args: argparse.Namespace, settings: config.Settings, rulebook: RuleBook | None) -> None:
     """Process many (resume, job_description) pairs from a CSV file concurrently."""
     import concurrent.futures
 
@@ -465,6 +477,7 @@ def run_batch(args: argparse.Namespace, settings: config.Settings) -> None:
                 state=None,
                 url=None,
                 report_json=None if settings.no_store else report_path,
+                rulebook=rulebook,
             )
         except (SystemExit, Exception) as exc:  # noqa: BLE001 - one bad pair must not kill the batch
             with lock:
@@ -538,20 +551,6 @@ def main(argv: list[str] | None = None) -> None:
     if args.log_json:
         settings = replace(settings, log_json=True)
 
-    if args.batch is not None:
-        run_batch(args, settings)
-        return
-
-    resume = config.read_input(args.resume)
-    job_description = config.read_input(args.job_description)
-
-    if settings.redact:
-        resume = redact_text(resume)
-        job_description = redact_text(job_description)
-
-    # Resume: the flag names a run directory, which is not the resume file above. Sharing the
-    # two under one name made the default run treat its input as a run directory, and made
-    # --resume silently do nothing.
     prior_rounds: list[Round] | None = None
     store_dir: Path | None = None
     if args.run_dir is not None:
@@ -561,6 +560,26 @@ def main(argv: list[str] | None = None) -> None:
             f"  Resuming {args.run_dir.name} "
             f"({len(prior_rounds)} completed round{'' if len(prior_rounds) == 1 else 's'})"
         )
+
+    active_rulebook: RuleBook | None = None
+    if args.rules is not None:
+        try:
+            active_rulebook = compose_rulebooks(BUILTIN_RULEBOOK, load_rules(args.rules))
+        except RuleValidationError as exc:
+            raise SystemExit(f"{args.rules}: {exc}") from exc
+    elif prior_rounds:
+        active_rulebook = prior_rounds[-1].review.rulebook
+
+    if args.batch is not None:
+        run_batch(args, settings, active_rulebook)
+        return
+
+    resume = config.read_input(args.resume)
+    job_description = config.read_input(args.job_description)
+
+    if settings.redact:
+        resume = redact_text(resume)
+        job_description = redact_text(job_description)
 
     # A resumed run keeps the directory it came from, so the rounds stay in one place and
     # --purge <that directory> still removes the whole run.
@@ -625,6 +644,7 @@ def main(argv: list[str] | None = None) -> None:
             lambda: [ln for ln, v in state.decisions().items() if v == "rejected"]
         ) if state is not None else None,
         reviewer=shared_reviewer,
+        rulebook=active_rulebook,
     )
 
     if state is not None:

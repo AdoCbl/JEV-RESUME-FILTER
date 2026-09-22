@@ -112,6 +112,57 @@ def test_run_one_saves_rounds_to_disk(tmp_path: Path, monkeypatch) -> None:
     assert (d / "round-01.json").exists()
 
 
+def test_main_merges_customer_rules_with_the_builtin_rulebook(tmp_path: Path, monkeypatch) -> None:
+    from polisher.cli import main
+    from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
+
+    monkeypatch.setattr("polisher.runs.RUNS_DIR", tmp_path / "runs")
+    resume = tmp_path / "resume.txt"
+    resume.write_text("Jane Smith\nBuilt the API.")
+    jd = tmp_path / "jd.txt"
+    jd.write_text("Backend engineer.")
+    out = tmp_path / "out.txt"
+    payload_path = tmp_path / "report.json"
+    rules = tmp_path / "customer-rules.toml"
+    rules.write_text(
+        """
+[[rules]]
+id = "keep-clearance"
+kind = "must"
+text = "Keep the clearance line when the original resume has one."
+source = "user"
+check = "jev"
+severity = "blocking"
+""".strip()
+        + "\n"
+    )
+
+    with (
+        patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient()),
+        patch("polisher.cli._TSC", create=True),
+        patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
+    ):
+        main([
+            str(resume),
+            str(jd),
+            "--out",
+            str(out),
+            "--report-json",
+            str(payload_path),
+            "--rules",
+            str(rules),
+            "--secrets",
+            str(_write_secrets(tmp_path)),
+            "--no-serve",
+        ])
+
+    payload = json.loads(payload_path.read_text())
+    rule_ids = {rule["id"] for rule in payload["rules"]["items"]}
+    assert "keep-clearance" in rule_ids
+    assert "resume_truth_only" in rule_ids
+    assert payload["manifest"]["ruleset_sources"] == ["user", "builtin"]
+
+
 def test_main_diff_runs(tmp_path: Path) -> None:
     import json
 

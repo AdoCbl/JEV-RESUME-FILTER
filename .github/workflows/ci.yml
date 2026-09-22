@@ -11,6 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Keep the browser-test runtime explicit: Playwright and any JS syntax checks should
+      # run against the same Node major in CI and on a developer machine.
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
