@@ -7,6 +7,7 @@ from unittest.mock import patch
 from polisher.config import Settings
 from polisher.loop import polish
 from polisher.report import build_manifest, build_report
+from polisher.rules import Rule, RuleBook
 from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
 
 RESUME = "Jane Smith\nBuilt the API."
@@ -88,6 +89,8 @@ def test_manifest_contains_rubric_hash() -> None:
     s = _settings()
     manifest = build_manifest(s, run_id="test-run-001")
     assert "rubric_hash" in manifest
+    assert "ruleset_hash" in manifest
+    assert manifest["ruleset_sources"] == ["builtin"]
     assert len(manifest["rubric_hash"]) == 16
     assert manifest["run_id"] == "test-run-001"
 
@@ -108,6 +111,60 @@ def test_run_id_in_payload() -> None:
         run_id="my-run-123",
     )
     assert payload["manifest"]["run_id"] == "my-run-123"
+
+
+def test_manifest_ruleset_hash_changes_with_rulebook() -> None:
+    s = _settings()
+    base = RuleBook(
+        rules=(
+            Rule(
+                id="one",
+                kind="must",
+                text="Keep the clearance line.",
+                source="user",
+                check="code",
+                severity="blocking",
+            ),
+        )
+    )
+    changed = RuleBook(
+        rules=(
+            Rule(
+                id="two",
+                kind="must_not",
+                text="Do not add a summary section.",
+                source="user",
+                check="code",
+                severity="blocking",
+            ),
+        )
+    )
+
+    assert build_manifest(s, rulebook=base)["ruleset_hash"] != build_manifest(s, rulebook=changed)["ruleset_hash"]
+
+
+def test_build_report_carries_rulebook_and_rule_results() -> None:
+    run, s = _one_round_run()
+    payload = build_report(
+        settings=s,
+        resume=RESUME,
+        job_description=JD,
+        paths={},
+        rounds=run.rounds,
+        best=run.best,
+        stop_reason=run.stop_reason,
+        status="done",
+    )
+
+    assert payload["rules"]["items"]
+    assert payload["rules"]["ruleset_hash"] == payload["manifest"]["ruleset_hash"]
+    assert payload["format"]["words"] > 0
+    assert payload["posting"]["requirements"]
+    review = payload["versions"][1]["review"]
+    assert "rule_results" in review
+    assert "violations" in review
+    assert "format" in review
+    assert "posting" in review
 
 
 def test_ledger_and_trust_come_from_the_same_audit() -> None:

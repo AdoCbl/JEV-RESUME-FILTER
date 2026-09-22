@@ -23,6 +23,8 @@ from typing import Any
 
 from .config import DEFAULT_HOST, DEFAULT_PORT
 from .page import render_page
+from .rules import Rule, RuleBook
+from .rules_builtin import evaluate_rules
 
 _CSRF_HEADER = "X-Csrf-Token"
 
@@ -36,6 +38,7 @@ class ReportState:
     csrf_token: str = field(default_factory=lambda: secrets.token_hex(32))
     # Audit log callback: (line, verdict) -> None; set by cli.py when --no-store is off
     on_review: Any = None  # Callable[[str, str], None] | None
+    on_waive: Any = None  # Callable[[str], None] | None
     # Context for /api/check: set by cli.py after the loop starts
     original_resume: str | None = None
     reviewer: Any = None  # TypeSafeClient | None
@@ -46,6 +49,8 @@ class ReportState:
     # The most recent live check: the edited text and the lines it could not ground
     _checked_text: str | None = None
     _checked_unsupported: list[str] = field(default_factory=list)
+    _checked_blocking_violations: list[str] = field(default_factory=list)
+    _waived_rules: set[str] = field(default_factory=set)
 
     def set_report(self, report: dict[str, Any]) -> None:
         with self._lock:
@@ -53,6 +58,7 @@ class ReportState:
             # A round's payload replaces the previous one, so re-apply the verdicts already
             # recorded: an approval must not disappear from the page because a round landed.
             self._apply_decisions()
+            self._apply_waivers()
 
     def get_report(self) -> dict[str, Any]:
         with self._lock:
@@ -74,6 +80,24 @@ class ReportState:
                 if verdict is not None:
                     entry["decision"] = verdict
 
+    def _apply_waivers(self) -> None:
+        if not self._waived_rules:
+            return
+        rules = self._report.get("rules") or {}
+        rules["waived"] = sorted(self._waived_rules)
+        for version in self._report.get("versions", []):
+            review = version.get("review")
+            if review is None:
+                continue
+            for entry in review.get("rule_results", []):
+                if entry.get("id") in self._waived_rules:
+                    entry["state"] = "waived"
+            review["violations"] = [
+                entry
+                for entry in review.get("rule_results", [])
+                if entry.get("state") == "violated"
+            ]
+
     def record_decision(self, line: str, verdict: str) -> None:
         with self._lock:
             self._decisions[line] = verdict
@@ -82,6 +106,15 @@ class ReportState:
     def decisions(self) -> dict[str, str]:
         with self._lock:
             return dict(self._decisions)
+
+    def record_waiver(self, rule_id: str) -> None:
+        with self._lock:
+            self._waived_rules.add(rule_id)
+            self._apply_waivers()
+
+    def waived_rules(self) -> set[str]:
+        with self._lock:
+            return set(self._waived_rules)
 
     def unresolved_flagged(self) -> list[str]:
         """Flagged lines in the best version that have not been approved or rejected."""
@@ -104,6 +137,11 @@ class ReportState:
             raise ValueError(f"no version {index} in this run")
         if match.get("kind") == "original":
             raise ValueError("the original resume is the input, not an output")
+        blocking = self._blocking_rule_violations(match.get("review") or {})
+        if blocking:
+            raise ValueError(
+                f"{len(blocking)} blocking rule violation(s): {'; '.join(blocking[:3])}"
+            )
         self.output_path.write_text(match["text"] + "\n")
         self.saved_index = index
         with self._lock:
@@ -111,10 +149,16 @@ class ReportState:
                 version["saved"] = version.get("index") == index
         return self.output_path
 
-    def record_check(self, text: str, unsupported: list[str]) -> None:
+    def record_check(
+        self,
+        text: str,
+        unsupported: list[str],
+        blocking_violations: list[str] | None = None,
+    ) -> None:
         with self._lock:
             self._checked_text = text
             self._checked_unsupported = list(unsupported)
+            self._checked_blocking_violations = list(blocking_violations or [])
 
     def save_edit(self, text: str) -> Path:
         """Write a hand-edited draft — but only once its own check came back clean.
@@ -128,13 +172,47 @@ class ReportState:
             if self._checked_text != text:
                 raise ValueError("check this edit before saving it")
             unsupported = list(self._checked_unsupported)
+            blocking_violations = list(self._checked_blocking_violations)
         if unsupported:
             shown = "; ".join(line[:60] for line in unsupported[:3])
             raise ValueError(
                 f"{len(unsupported)} line(s) still cannot be grounded: {shown}"
             )
+        if blocking_violations:
+            shown = "; ".join(blocking_violations[:3])
+            raise ValueError(
+                f"{len(blocking_violations)} blocking rule violation(s): {shown}"
+            )
         self.output_path.write_text(text + "\n")
         return self.output_path
+
+    def _report_rulebook(self) -> RuleBook:
+        report = self.get_report()
+        items = ((report.get("rules") or {}).get("items") or [])
+        if not items:
+            return RuleBook(rules=())
+        return RuleBook(
+            rules=tuple(
+                Rule(
+                    id=item["id"],
+                    kind=item["kind"],
+                    text=item["text"],
+                    source=item["source"],
+                    check=item["check"],
+                    severity=item["severity"],
+                )
+                for item in items
+            )
+        )
+
+    def _blocking_rule_violations(self, review: dict[str, Any]) -> list[str]:
+        rules = {rule.id: rule for rule in self._report_rulebook()}
+        violations = review.get("violations", []) or []
+        return [
+            rules[entry["id"]].text
+            for entry in violations
+            if entry.get("id") in rules and rules[entry["id"]].severity == "blocking"
+        ]
 
 
 def _handler(state: ReportState) -> type[BaseHTTPRequestHandler]:
@@ -204,6 +282,17 @@ def _handler(state: ReportState) -> type[BaseHTTPRequestHandler]:
                     state.on_review(line, verdict)
                 self._json(200, {"line": line, "verdict": verdict})
 
+            elif self.path == "/api/waive":
+                rule_id = body.get("rule_id", "")
+                rule_ids = {rule.id for rule in state._report_rulebook()}
+                if not rule_id or rule_id not in rule_ids:
+                    self._json(400, {"error": "valid rule_id required"})
+                    return
+                state.record_waiver(rule_id)
+                if state.on_waive is not None:
+                    state.on_waive(rule_id)
+                self._json(200, {"rule_id": rule_id, "verdict": "waived"})
+
             elif self.path == "/api/check":
                 if state.reviewer is None or not state.original_resume:
                     self._json(503, {"error": "live checking not available for this run"})
@@ -226,7 +315,18 @@ def _handler(state: ReportState) -> type[BaseHTTPRequestHandler]:
                     self._json(500, {"error": str(exc)})
                     return
                 unsupported = [line.text for line in audited if line.unsupported]
-                state.record_check(draft_text, unsupported)
+                rulebook = state._report_rulebook()
+                rule_results = evaluate_rules(draft_text, rulebook)
+                rules = {rule.id: rule for rule in rulebook}
+                blocking_violations = [
+                    rules[result.rule_id].text
+                    for result in rule_results
+                    if result.state == "violated"
+                    and result.rule_id in rules
+                    and rules[result.rule_id].severity == "blocking"
+                    and result.rule_id not in state.waived_rules()
+                ]
+                state.record_check(draft_text, unsupported, blocking_violations)
                 self._json(200, {
                     "lines": [
                         {
@@ -241,6 +341,7 @@ def _handler(state: ReportState) -> type[BaseHTTPRequestHandler]:
                         for line in audited
                     ],
                     "unsupported": unsupported,
+                    "blocking_violations": blocking_violations,
                 })
 
             else:

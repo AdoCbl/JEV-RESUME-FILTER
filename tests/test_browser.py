@@ -108,6 +108,31 @@ def _make_report(flagged_line: str) -> dict[str, Any]:
             {"requirement": "Distributed systems experience", "draft_line": flagged_line},
             {"requirement": "Observability tooling", "draft_line": None},
         ],
+        "rule_results": [
+            {
+                "id": "no-summary",
+                "state": "violated",
+                "probability": 0.91,
+                "findings": [],
+                "checks": [],
+            },
+            {
+                "id": "plain-text-only",
+                "state": "passed",
+                "probability": None,
+                "findings": [],
+                "checks": [],
+            },
+        ],
+        "violations": [
+            {
+                "id": "no-summary",
+                "state": "violated",
+                "probability": 0.91,
+                "findings": [],
+                "checks": [],
+            }
+        ],
         "low_confidence": [],
         "improvement": None,
         "reviewed": True,
@@ -154,6 +179,51 @@ def _make_report(flagged_line: str) -> dict[str, Any]:
                 "fabrication_block": 0.50,
                 "confidence_floor": 0.60,
                 "gap_margin": 0.15,
+            },
+        },
+        "rules": {
+            "items": [
+                {
+                    "id": "no-summary",
+                    "kind": "must_not",
+                    "text": "Do not add a summary section.",
+                    "source": "user",
+                    "check": "jev",
+                    "severity": "blocking",
+                },
+                {
+                    "id": "plain-text-only",
+                    "kind": "format",
+                    "text": "Plain text only.",
+                    "source": "builtin",
+                    "check": "code",
+                    "severity": "blocking",
+                },
+            ],
+            "conflicts": [],
+        },
+        "posting": {
+            "requirements": [
+                {
+                    "text": "Distributed systems experience",
+                    "section": "requirements",
+                    "priority": "must_have",
+                },
+                {
+                    "text": "Observability tooling",
+                    "section": "requirements",
+                    "priority": "nice_to_have",
+                },
+            ],
+            "sections": {
+                "requirements": ["Distributed systems experience", "Observability tooling"],
+                "responsibilities": [],
+                "boilerplate": [],
+            },
+            "keywords": {
+                "salient": ["distributed", "systems", "observability"],
+                "named_in_draft": ["distributed", "systems"],
+                "supported_missing": [],
             },
         },
         "versions": [
@@ -352,9 +422,72 @@ def test_the_ledger_and_the_coverage_matrix_render(page: Page, tmp_path: Path) -
         assert line in page.locator("#ledger").inner_text()
         coverage = page.locator("#coverage").inner_text()
         assert "Distributed systems experience" in coverage
+        assert "must have" in coverage.lower()
+        assert "salient terms" in coverage.lower()
         # The unanswered requirement is the point: it must read as absent, not omitted.
         assert "leave it out rather than invent it" in coverage
         assert page.locator("#coverage .mark.no").count() == 1
+    finally:
+        httpd.shutdown()
+
+
+def test_scores_show_the_verdict_band_without_recomputed_rows(page: Page, tmp_path: Path) -> None:
+    from polisher.server import ReportState, start
+
+    state = ReportState(output_path=tmp_path / "out.txt")
+    state.set_report(_make_report("Built the distributed systems platform."))
+    httpd = start(state, host="127.0.0.1", port=0)
+    try:
+        page.goto(f"http://127.0.0.1:{httpd.server_port}")
+        page.wait_for_selector("#scores", timeout=3000)
+        scores = page.locator("#scores").inner_text()
+        checks = page.locator("#checks").inner_text()
+        page.locator("#totals summary").click()
+        totals = page.locator("#totals").inner_text()
+        totals_lower = totals.lower()
+
+        assert "Needs your review" in scores
+        assert "target 0.90" in scores
+        assert "grounded = 1" not in scores
+        assert "mean line grounding" not in checks
+        assert "fabrication risk" not in checks
+        assert "carried" in totals_lower
+    finally:
+        httpd.shutdown()
+
+
+def test_rule_waiver_updates_the_rulebook_window(page: Page, tmp_path: Path) -> None:
+    from polisher.server import ReportState, start
+
+    state = ReportState(output_path=tmp_path / "out.txt")
+    state.set_report(_make_report("Built the distributed systems platform."))
+    httpd = start(state, host="127.0.0.1", port=0)
+    try:
+        page.goto(f"http://127.0.0.1:{httpd.server_port}")
+        page.wait_for_selector("#rules summary", timeout=3000)
+        page.locator("#rules button.rule-waive").click()
+        page.wait_for_selector("#rules .rule-state.waived", timeout=5000)
+        assert state.get_report()["versions"][1]["review"]["violations"] == []
+        assert "waived" in page.locator("#rules").inner_text().lower()
+    finally:
+        httpd.shutdown()
+
+
+def test_sendoff_panel_answers_what_now(page: Page, tmp_path: Path) -> None:
+    from polisher.server import ReportState, start
+
+    state = ReportState(output_path=tmp_path / "out.txt")
+    state.set_report(_make_report("Built the distributed systems platform."))
+    httpd = start(state, host="127.0.0.1", port=0)
+    try:
+        page.goto(f"http://127.0.0.1:{httpd.server_port}")
+        page.wait_for_selector("#sendoff", timeout=3000)
+        sendoff = page.locator("#sendoff").inner_text().lower()
+        assert "needs your review" in sendoff
+        assert "what remains" in sendoff
+        assert "observability tooling" in sendoff
+        assert page.locator("#copyfinal").count() == 1
+        assert page.locator("#downloadfinal").count() == 1
     finally:
         httpd.shutdown()
 

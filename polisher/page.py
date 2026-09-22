@@ -204,6 +204,12 @@ details[open] > summary .caret::before{content:"▾"}
 .hero-line .risk{color:var(--pink-ink);font-weight:600}
 .hero-line .safe{color:var(--sage-ink);font-weight:600}
 .hero-eyebrow{color:var(--magenta-ink)}
+.verdict-band{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:baseline;margin:0 0 12px;
+  padding:10px 12px;border:2px solid var(--ink);background:var(--magenta);color:var(--ink)}
+.verdict-band.safe{background:var(--sage)}
+.verdict-band.risk{background:var(--pink)}
+.verdict-band .word{font:400 11px/1.5 var(--mono);letter-spacing:.06em}
+.verdict-band .meta{font:400 11px/1.55 var(--mono);color:rgba(30,30,30,.72)}
 .tag{display:inline-block;margin-left:10px;padding:2px 6px;border:1px solid var(--ink);
   color:var(--ink);font-size:10.5px;letter-spacing:.06em;text-transform:capitalize;
   vertical-align:3px}
@@ -216,6 +222,23 @@ details[open] > summary .caret::before{content:"▾"}
 .hero-trust .unsupported b{color:var(--pink-ink)}
 .hero-trust .uncertain b{color:var(--magenta-ink)}
 .hero-trust .carried b{color:var(--sage-ink)}
+
+/* ── Rulebook: every rule, its state, and waivers ─────────────────────────── */
+.rulebook{padding:0}
+.rule-item{padding:13px 16px;border-bottom:1px dotted var(--rule)}
+.rule-item:last-child{border-bottom:none}
+.rule-top{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:baseline;justify-content:space-between}
+.rule-text{font-size:15px;line-height:1.45;letter-spacing:.01em;color:var(--ink)}
+.rule-meta,.rule-findings{margin-top:6px;font:400 11px/1.55 var(--mono);color:var(--mute)}
+.rule-findings{color:var(--ink-2)}
+.rule-state{display:inline-block;padding:1px 6px;border:1px solid var(--ink);
+  font:400 10.5px/1.4 var(--mono);color:var(--ink)}
+.rule-state.passed{background:var(--sage)}
+.rule-state.violated{background:var(--pink)}
+.rule-state.waived{background:var(--grey)}
+.rule-waive{margin-top:8px;padding:5px 9px;font:400 10.5px/1.4 var(--mono);text-transform:lowercase}
+.rule-conflicts{margin:14px 16px 0;padding:10px 12px;border:2px solid var(--ink);
+  background:var(--pink);color:var(--ink);font:400 11px/1.55 var(--mono)}
 
 /* ── Measurements: a name, a leader, a number, and the bar it came from ───── */
 .rows{padding:0}
@@ -340,11 +363,24 @@ button.src-btn:hover{background:none;color:var(--ink)}
 .cov-row .mark.ok{color:var(--sage-ink)}
 .cov-row .mark.no{color:var(--pink-ink)}
 .cov-row .req{font-size:15px;line-height:1.45;letter-spacing:.01em;color:var(--ink)}
+.cov-row .req-meta{display:block;margin-top:4px;font:400 10.5px/1.5 var(--mono);color:var(--mute)}
 .cov-row .ans{grid-column:2;font:400 11px/1.6 var(--mono);color:var(--mute)}
 /* A requirement nothing answers is the point of the matrix, so it gets the attention hue. */
 .cov-row.open-req{background:rgba(243,134,161,.16);margin:0 -8px;padding-left:8px;
   padding-right:8px}
 .cov-row.open-req .ans{color:var(--pink-ink)}
+.cov-keywords{padding:14px 16px;border-top:1px solid var(--ink);font:400 11px/1.6 var(--mono);color:var(--mute)}
+.cov-keywords b{color:var(--ink);font-weight:500}
+.sendoff{padding:16px}
+.sendoff-head{display:flex;flex-wrap:wrap;gap:10px 20px;align-items:flex-end;justify-content:space-between}
+.sendoff-word{font-size:clamp(28px,4.4vw,56px);line-height:.9;letter-spacing:-.03em;color:var(--ink)}
+.sendoff-actions{display:flex;flex-wrap:wrap;gap:8px}
+.sendoff-panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:16px}
+.sendoff-panel{padding:14px;border:2px solid var(--ink);background:var(--paper)}
+.sendoff-panel h2{font:400 11px/1.5 var(--mono);letter-spacing:.06em;text-transform:capitalize;color:var(--mute)}
+.sendoff-panel ul{margin:10px 0 0;padding-left:18px}
+.sendoff-panel li{margin:0 0 8px;color:var(--ink-2)}
+.sendoff-panel li:last-child{margin-bottom:0}
 details.sub{border-top:1px solid var(--ink)}
 details.sub > summary{display:flex;flex-wrap:wrap;gap:4px 16px;
   justify-content:space-between;padding:11px 16px;cursor:pointer;list-style:none;
@@ -431,8 +467,10 @@ footer .keys{display:flex;flex-wrap:wrap;gap:9px;align-items:baseline;margin-lef
       </div>
     </section>
     <section id="checks"></section>
+    <section id="rules"></section>
     <section id="ledger"></section>
     <section id="coverage"></section>
+    <section id="sendoff"></section>
     <section id="totals"></section>
   </main>
 </div>
@@ -455,6 +493,7 @@ const auditKey = (text) => String(text).trim().replace(/^[-•*–—·]+/, "").
 const versions = () => state.report.versions || [];
 const current = () => versions()[state.index] || null;
 const previous = () => versions()[state.index - 1] || null;
+const bestVersion = () => versions().find((version) => version.index === state.report.best_index) || current();
 const spaced = (name) => String(name).replace(/_/g, " ");
 // Dimension and check names are lowercase identifiers; these read as words except for the
 // two the reviewer knows by their capitals. Done with a map, not a word-boundary regex,
@@ -465,7 +504,7 @@ const words = (name) => spaced(name).split(" ")
 
 // Folded windows the reader opened. Every window is rebuilt from scratch on each poll, so
 // the open state has to live out here or a live run would keep shutting them.
-const _open = { ledger:true, coverage:true, totals:false };
+const _open = { rules:true, ledger:true, coverage:true, totals:false };
 function foldWindow(id, title, meta, body, tone) {
   return `<details class="win${tone ? " " + tone : ""}" data-fold="${id}"${
     _open[id] ? " open" : ""}>
@@ -519,8 +558,7 @@ function dimensionRows(version, prev) {
     const score = version.review.scores[name];
     const before = prev && prev.review ? prev.review.scores[name].score : null;
     const low = score.confidence < floor;
-    const meta = `level ${score.level}/${cfg.top_level}${low
-      ? ` · confidence only ${score.confidence.toFixed(2)}` : ""}`;
+    const meta = `level ${score.level}/${cfg.top_level}`;
     return leaderRow(name, score.score.toFixed(2), "/4", `${meta} ${delta(score.score, before)}`,
                      low, score.normalized, bandClass(score.normalized, 0.75, 0.5));
   }).join("");
@@ -536,17 +574,35 @@ function checkRows(version) {
                      hot ? `blocks at ${block.toFixed(2)}` : "under the block line",
                      hot, probability, hot ? "risk" : "safe");
   });
-  rows.push(leaderRow("mean line grounding", review.line_grounding.toFixed(2), "",
-    `over ${review.audited_lines} lines`, false, review.line_grounding,
-    bandClass(review.line_grounding, 0.8, 0.5)));
-  // The gate itself, last: the mean can be high while one line sinks the score, and the
-  // whole point of the number is that it is the worst signal, not the average one.
-  const risk = review.fabrication_risk;
-  rows.push(leaderRow("fabrication risk", risk.toFixed(2), "",
-    risk >= block ? `blocks at ${block.toFixed(2)}`
-      : "the loudest signal: the worst check or the weakest line",
-    risk >= block, risk, risk >= block ? "risk" : "safe"));
   return rows.join("");
+}
+
+function verdictSummary(version, overall) {
+  const cfg = state.report.config || {};
+  const review = version.review;
+  const target = cfg.target_score ?? 0.9;
+  const block = cfg.fabrication_block ?? 0.5;
+  const composed = `quality ${review.quality.toFixed(2)} × grounded ${review.groundedness.toFixed(2)}`;
+  const reweighted = _isReweighted() ? " · re-weighted view" : "";
+  if (review.blocked || review.fabrication_risk >= block) {
+    return {
+      cls: "risk",
+      label: "Not grounded",
+      meta: `${composed} · blocks at ${block.toFixed(2)}${reweighted}`,
+    };
+  }
+  if (overall >= target) {
+    return {
+      cls: "safe",
+      label: "Ready to send",
+      meta: `${composed} · ${(overall - target).toFixed(2)} over target ${target.toFixed(2)}${reweighted}`,
+    };
+  }
+  return {
+    cls: "",
+    label: "Needs your review",
+    meta: `${composed} · ${(target - overall).toFixed(2)} short of target ${target.toFixed(2)}${reweighted}`,
+  };
 }
 
 function renderScores() {
@@ -575,15 +631,14 @@ function renderScores() {
         .join(" against ")
     : esc(words(review.biggest_gap));
   const trust = review.trust || {};
-  const block = cfg.fabrication_block ?? 0.5;
-  const gated = review.fabrication_risk >= block;
+  const verdict = verdictSummary(version, overall);
   const weakest = review.weakest_line
     ? `<span class="weakest">weakest line · ${review.weakest_line.support.toFixed(2)} · ${
         esc(review.weakest_line.text)}</span>`
     : "";
   const best = review.is_best ? `<span class="tag">best</span>` : "";
   const blocked = review.blocked ? `<span class="tag bad">blocked</span>` : "";
-  const carried = version.reviewed ? "" : "unchanged, scores carried over";
+  const carried = version.reviewed ? "" : "unchanged from the previous round";
   el.innerHTML = `<div class="frame">
     <div class="hero-head">
       <span class="label hero-eyebrow">verdict ......</span>
@@ -593,12 +648,10 @@ function renderScores() {
     <div class="hero-body">
       <div class="hero-number">${overall.toFixed(2)}</div>
       <div class="hero-side">
-        <p class="hero-line">quality <b>${review.quality.toFixed(2)}</b> ×
-          grounded <b class="${gated ? "risk" : "safe"}">${review.groundedness.toFixed(2)}</b>
-          ${_isReweighted() ? "<b>· re-weighted view</b>" : ""}</p>
-        <p class="hero-line muted">grounded = 1 − fabrication risk
-          <b class="${gated ? "risk" : "safe"}">${review.fabrication_risk.toFixed(2)}</b>${
-          gated ? " — over the block line" : ""}</p>
+        <div class="verdict-band ${verdict.cls}">
+          <span class="word">${verdict.label}</span>
+          <span class="meta">${verdict.meta}</span>
+        </div>
         <p class="hero-line">${before === null
           ? "<b>the first draft</b> — nothing to compare it against yet"
           : `${change} against the previous round`}</p>
@@ -607,10 +660,8 @@ function renderScores() {
     </div>
     <div class="hero-trust">
       <span><b>${trust.audited || 0}</b> lines audited</span>
-      <span class="carried"><b>${trust.carried || 0}</b> carried, not re-asked</span>
       <span class="unsupported"><b>${trust.unsupported || 0}</b> unsupported</span>
       <span class="uncertain"><b>${trust.uncertain || 0}</b> uncertain</span>
-      <span class="uncertain"><b>${trust.low_confidence || 0}</b> low-confidence dimensions</span>
       ${weakest}
     </div>
   </div>`;
@@ -628,10 +679,55 @@ function renderChecks() {
     </div>
     <div class="win pink">
       <div class="win-bar"><span class="t">fabrication checks</span>
-        <span class="r">probability the draft added something the original does not support —
-          a draft is blocked at ${(cfg.fabrication_block ?? 0.5).toFixed(2)}</span></div>
+        <span class="r">one row per guardrail — the block line is ${(cfg.fabrication_block ?? 0.5).toFixed(2)}</span></div>
       <div class="rows">${checkRows(version)}</div>
     </div>`;
+}
+
+function ruleStateWord(state_) {
+  return state_ === "not_checkable" ? "not checkable" : state_.replace(/_/g, " ");
+}
+
+function renderRules() {
+  const el = $("rules");
+  const version = current();
+  const review = version && version.review;
+  const rules = ((state.report.rules || {}).items) || [];
+  if (!review || !rules.length) { el.innerHTML = ""; return; }
+  const results = {};
+  (review.rule_results || []).forEach((result) => { results[result.id] = result; });
+  const conflicts = ((state.report.rules || {}).conflicts) || [];
+  let passed = 0, violated = 0, waived = 0, unchecked = 0;
+  const rows = rules.map((rule) => {
+    const result = results[rule.id] || { state: "not_checkable", findings: [], checks: [] };
+    if (result.state === "passed") passed += 1;
+    else if (result.state === "violated") violated += 1;
+    else if (result.state === "waived") waived += 1;
+    else unchecked += 1;
+    const probability = result.probability === null || result.probability === undefined
+      ? "" : ` · JEV ${Number(result.probability).toFixed(2)}`;
+    const findings = (result.findings || []).length
+      ? `<div class="rule-findings">${esc(result.findings.join("; "))}</div>` : "";
+    const waive = result.state === "violated"
+      ? `<button class="rule-waive" data-rule-id="${esc(rule.id)}">waive</button>` : "";
+    return `<div class="rule-item"><div class="rule-top">
+        <span class="rule-text">${esc(rule.text)}</span>
+        <span class="rule-state ${esc(result.state)}">${esc(ruleStateWord(result.state))}</span>
+      </div>
+      <div class="rule-meta">${esc(rule.source)} · ${esc(rule.kind)} · ${esc(rule.check)} · ${esc(rule.severity)}${probability}</div>
+      ${findings}${waive}</div>`;
+  }).join("");
+  const banner = conflicts.length
+    ? `<div class="rule-conflicts">${conflicts.map((item) => esc(item)).join(" · ")}</div>` : "";
+  const tone = violated ? "pink" : "grey";
+  el.innerHTML = foldWindow(
+    "rules",
+    "rulebook",
+    `${violated} violated · ${waived} waived · ${passed} passed · ${unchecked} not checkable`,
+    `${banner}<div class="rulebook">${rows}</div>`,
+    tone,
+  );
+  bindWindows(el);
 }
 
 // The lines the reviewer could not ground, with the decision they need. They come straight
@@ -790,8 +886,6 @@ function renderLedger() {
   const trust = version.review.trust || {};
   const withBand = entries.map((entry) => Object.assign({}, entry, { band: _band(entry.support) }));
   const attention = withBand.filter((entry) => entry.band !== "ok");
-  // A run that grounded everything has nothing to put in the default band, and an empty
-  // "needs attention" reads as a broken panel rather than as good news: fall back to all.
   const filter = (_ledgerFilter === "attention" && !attention.length) ? "all" : _ledgerFilter;
   const shown = filter === "all" ? withBand
     : filter === "attention" ? attention
@@ -808,7 +902,7 @@ function renderLedger() {
     ${shown.length ? `<ul class="ledger">${shown.map(ledgerItem).join("")}</ul>`
                    : `<p class="lead">nothing in this band</p>`}`;
   el.innerHTML = foldWindow("ledger", "grounding ledger",
-    `${trust.audited || 0} audited · ${trust.carried || 0} carried · uncertain band ${floor}–${review}`,
+    `${trust.audited || 0} audited · uncertain band ${floor}–${review}`,
     body, "sage");
   bindWindows(el);
   el.querySelectorAll(".filters button").forEach((button) => {
@@ -823,14 +917,29 @@ function renderCoverage() {
   if (!coverage.length) { el.innerHTML = ""; return; }
   const answered = coverage.filter((entry) => entry.draft_line).length;
   const job = state.report.job_description || "";
-  const rows = coverage.map((entry) => `<div class="cov-row${entry.draft_line ? "" : " open-req"}">
+  const posting = (version && version.review && version.review.posting) || state.report.posting || {};
+  const details = posting.requirements || [];
+  const keywords = posting.keywords || {};
+  const rows = coverage.map((entry, index) => {
+    const detail = details[index] || {};
+    const meta = detail.section && detail.priority
+      ? `<span class="req-meta">${esc(words(detail.section))} · ${esc(words(detail.priority))}</span>`
+      : "";
+    return `<div class="cov-row${entry.draft_line ? "" : " open-req"}">
       <span class="mark ${entry.draft_line ? "ok" : "no"}">${entry.draft_line ? "✓" : "○"}</span>
-      <span class="req">${esc(entry.requirement)}</span>
+      <span class="req">${esc(entry.requirement)}${meta}</span>
       <span class="ans">${entry.draft_line
         ? "answered by · " + esc(entry.draft_line)
         : "no line in this draft answers it — leave it out rather than invent it"}</span>
-    </div>`).join("");
+    </div>`;
+  }).join("");
+  const keywordBlock = `<div class="cov-keywords">
+      <div><b>salient terms</b> · ${esc((keywords.salient || []).join(", ") || "none extracted")}</div>
+      <div><b>named in this draft</b> · ${esc((keywords.named_in_draft || []).join(", ") || "none")}</div>
+      <div><b>supported but unnamed</b> · ${esc((keywords.supported_missing || []).join(", ") || "none")}</div>
+    </div>`;
   const body = `<div class="cov">${rows}</div>
+    ${keywordBlock}
     <details class="sub"><summary>
       <span>show the target job description</span>
       <span>${job ? job.split("\\n").length + " lines" : "not captured"}</span></summary>
@@ -838,6 +947,61 @@ function renderCoverage() {
   el.innerHTML = foldWindow("coverage", "requirement coverage",
     `${answered} of ${coverage.length} job requirements answered`, body, "sage");
   bindWindows(el);
+}
+
+function renderSendoff() {
+  const el = $("sendoff");
+  const version = bestVersion();
+  if (!version || !version.review) { el.innerHTML = ""; return; }
+  const review = version.review;
+  const verdict = verdictSummary(version, scoreOf(version));
+  const rules = ((state.report.rules || {}).items) || [];
+  const byId = {};
+  rules.forEach((rule) => { byId[rule.id] = rule; });
+  const violations = review.violations || [];
+  const blocking = violations
+    .filter((entry) => byId[entry.id] && byId[entry.id].severity === "blocking")
+    .map((entry) => byId[entry.id].text);
+  const advisory = violations
+    .filter((entry) => byId[entry.id] && byId[entry.id].severity === "advisory")
+    .map((entry) => byId[entry.id].text);
+  const uncovered = (review.coverage || [])
+    .filter((entry) => !entry.draft_line)
+    .map((entry) => entry.requirement);
+  const remaining = [];
+  if (blocking.length) remaining.push(...blocking.map((text) => `blocking rule · ${text}`));
+  if ((review.flagged_lines || []).length) {
+    remaining.push(...review.flagged_lines.map((text) => `unsupported line · ${text}`));
+  }
+  if (uncovered.length) remaining.push(...uncovered.map((text) => `missing evidence · ${text}`));
+  if (advisory.length) remaining.push(...advisory.map((text) => `advisory rule · ${text}`));
+  const remains = remaining.length
+    ? remaining.map((item) => `<li>${esc(item)}</li>`).join("")
+    : `<li>Nothing blocking remains. This draft says what the original resume can support.</li>`;
+  const declined = uncovered.length
+    ? uncovered.map((item) => `<li>${esc(item)} · left out because the original resume does not support it clearly enough.</li>`).join("")
+    : `<li>The loop did not withhold any requirement for lack of evidence.</li>`;
+  const tone = verdict.cls === "safe" ? "sage" : verdict.cls === "risk" ? "pink" : "magenta";
+  el.innerHTML = `<div class="win ${tone}">
+      <div class="win-bar"><span class="t">send-off</span>
+        <span class="r">best draft · ${esc(version.label)}</span></div>
+      <div class="sendoff">
+        <div class="sendoff-head">
+          <div>
+            <div class="display sendoff-word">${esc(verdict.label)}</div>
+            <p class="hero-line">${esc(verdict.meta)}</p>
+          </div>
+          <div class="sendoff-actions">
+            <button id="copyfinal">copy final text</button>
+            <button id="downloadfinal">download .txt</button>
+          </div>
+        </div>
+        <div class="sendoff-panels">
+          <div class="sendoff-panel"><h2>what remains</h2><ul>${remains}</ul></div>
+          <div class="sendoff-panel"><h2>declined to add</h2><ul>${declined}</ul></div>
+        </div>
+      </div>
+    </div>`;
 }
 
 function renderTotals() {
@@ -848,6 +1012,8 @@ function renderTotals() {
   const total = totals.total_tokens || 0;
   const reviewer = totals.reviewer_tokens || 0;
   const share = total ? Math.round((reviewer / total) * 100) : 0;
+  const carried = versions().filter((version) => version.review).reduce((sum, version) =>
+    sum + ((((version.review || {}).trust || {}).carried) || 0), 0);
   let budget = "";
   if (cfg.max_tokens) {
     const used = total / cfg.max_tokens;
@@ -867,13 +1033,16 @@ function renderTotals() {
     const writer = (version.review.writer && version.review.writer.total_tokens) || 0;
     const reviewed = (version.review.reviewer && version.review.reviewer.total_tokens) || 0;
     const sum = writer + reviewed || 1;
+    const reused = ((version.review.trust || {}).carried) || 0;
     return `<div class="cost-row"><span>${esc(version.label)}</span>
-      <span class="num">${writer.toLocaleString()} writer · ${reviewed.toLocaleString()} reviewer</span>
+      <span class="num">${writer.toLocaleString()} writer · ${reviewed.toLocaleString()} reviewer${
+        reused ? ` · ${reused} carried` : ""}</span>
       ${meter(reviewed / sum, "")}</div>`;
   }).join("");
   const body = `<div class="kv">
       <span class="k">writer</span><span>${totals.writer_calls || 0} calls · ${(totals.writer_tokens || 0).toLocaleString()} tokens</span>
       <span class="k">reviewer</span><span>${totals.reviewer_calls || 0} calls · ${reviewer.toLocaleString()} tokens · ${share}% of the run</span>
+      <span class="k">carried</span><span>${carried} prior line verdicts reused</span>
       <span class="k">total</span><span>${total.toLocaleString()} tokens · ${totals.seconds || 0}s</span>
     </div>
     <div class="band-head"><span>cost per round</span>
@@ -1065,8 +1234,10 @@ function render() {
   renderFlagged();
   renderDiff();
   renderChecks();
+  renderRules();
   renderLedger();
   renderCoverage();
+  renderSendoff();
   renderTotals();
   updateEditControls();
 }
@@ -1074,14 +1245,15 @@ function render() {
 function select(index) {
   state.touched = true;
   state.index = Math.max(0, Math.min(versions().length - 1, index));
-  // Editing belongs to the version that was open; switching versions ends the edit.
   state.editing = false;
   state.editResults = null;
   state.editCheckedText = null;
   state.editUnsupported = [];
   render();
 }
+
 function step(delta) { select(state.index + delta); }
+
 function setSaved(message) { $("savestatus").textContent = message; }
 
 async function save() {
@@ -1121,6 +1293,52 @@ async function sendReview(line, verdict) {
   }
 }
 
+async function sendWaiver(ruleId) {
+  try {
+    const res = await fetch("/api/waive", {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Csrf-Token": CSRF_TOKEN },
+      body: JSON.stringify({ rule_id: ruleId }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setSaved(`waive error: ${data.error || res.status}`);
+      return;
+    }
+    setSaved(`waived rule: ${ruleId}`);
+    await refresh();
+  } catch (error) {
+    setSaved(`waive error: ${error}`);
+  }
+}
+
+async function copyFinalText() {
+  const version = bestVersion();
+  if (!version) return;
+  try {
+    await navigator.clipboard.writeText(version.text || "");
+    setSaved("copied final text to the clipboard");
+  } catch (error) {
+    setSaved(`copy error: ${error}`);
+  }
+}
+
+function downloadFinalText() {
+  const version = bestVersion();
+  if (!version) return;
+  const suggested = ((state.report.paths || {}).out || "polished_resume.txt").split("/").pop();
+  const blob = new Blob([version.text + "\\n"], { type: "text/plain;charset=utf-8" });
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = suggested || "polished_resume.txt";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(href);
+  setSaved(`downloaded ${link.download}`);
+}
+
 async function refresh() {
   try {
     const res = await fetch("/api/report", { cache: "no-store" });
@@ -1155,6 +1373,19 @@ $("flagged").addEventListener("click", (event) => {
     : undefined;
   if (line === undefined) return;
   sendReview(line, button.dataset.verdict);
+});
+
+$("rules").addEventListener("click", (event) => {
+  const button = event.target.closest("button.rule-waive");
+  if (!button) return;
+  sendWaiver(button.dataset.ruleId);
+});
+
+$("sendoff").addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  if (button.id === "copyfinal") copyFinalText();
+  if (button.id === "downloadfinal") downloadFinalText();
 });
 
 $("undo").addEventListener("click", () => step(-1));

@@ -8,11 +8,13 @@ from pathlib import Path
 
 import pytest
 
+from polisher.audit import AuditLog
 from polisher.server import ReportState, start, url
 
 SAMPLE_REPORT = {
     "status": "done",
     "best_index": 1,
+    "rules": {"items": []},
     "versions": [
         {"index": 0, "kind": "original", "text": "Original"},
         {"index": 1, "kind": "round", "text": "Polished\nresume", "review": {"flagged_lines": []}},
@@ -132,6 +134,66 @@ def test_post_review_invalid_verdict(running_server) -> None:
     assert status == 400
 
 
+def _report_with_rule_violation() -> dict:
+    return {
+        "status": "done",
+        "best_index": 1,
+        "rules": {
+            "items": [
+                {
+                    "id": "no-summary",
+                    "kind": "must_not",
+                    "text": "Do not add a summary section.",
+                    "source": "user",
+                    "check": "jev",
+                    "severity": "blocking",
+                }
+            ]
+        },
+        "versions": [
+            {"index": 0, "kind": "original", "text": "Original"},
+            {
+                "index": 1,
+                "kind": "round",
+                "text": "Polished",
+                "review": {
+                    "flagged_lines": [],
+                    "rule_results": [
+                        {"id": "no-summary", "state": "violated", "findings": []}
+                    ],
+                    "violations": [
+                        {"id": "no-summary", "state": "violated", "findings": []}
+                    ],
+                },
+            },
+        ],
+        "totals": {},
+        "config": {},
+        "manifest": {},
+    }
+
+
+def test_post_waive_marks_the_rule_as_waived_and_logs_it(tmp_path: Path) -> None:
+    state = ReportState(output_path=tmp_path / "out.txt")
+    state.set_report(_report_with_rule_violation())
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    state.on_waive = lambda rule_id: audit.record_rule(run_id="run-1", rule_id=rule_id)
+    httpd = start(state, host="127.0.0.1", port=0)
+    try:
+        status, body = _post(httpd, "/api/waive", {"rule_id": "no-summary"}, csrf=state.csrf_token)
+    finally:
+        httpd.shutdown()
+
+    assert status == 200
+    review = state.get_report()["versions"][1]["review"]
+    assert review["rule_results"][0]["state"] == "waived"
+    assert review["violations"] == []
+    entries = audit.read_all()
+    assert entries[0]["kind"] == "rule"
+    assert entries[0]["rule_id"] == "no-summary"
+    assert entries[0]["verdict"] == "waived"
+
+
 def test_url_helper_resolves_wildcard() -> None:
     class FakeHTTPD:
         server_port = 9999
@@ -153,6 +215,7 @@ def _report_with_a_flagged_line() -> dict:
     return {
         "status": "done",
         "best_index": 1,
+        "rules": {"items": []},
         "versions": [
             {"index": 0, "kind": "original", "text": "Original"},
             {
@@ -255,6 +318,54 @@ def test_save_edit_writes_once_the_check_is_clean(tmp_path: Path) -> None:
     state.record_check(BAD_LINE, [])
     state.save_edit(BAD_LINE)
     assert state.output_path.read_text().strip() == BAD_LINE
+
+
+def test_save_edit_refuses_blocking_rule_violations(tmp_path: Path) -> None:
+    state = _state_with_reviewer(tmp_path, support=0.95)
+    state.record_check(BAD_LINE, [], ["Keep the security clearance line."])
+    with pytest.raises(ValueError, match="blocking rule violation"):
+        state.save_edit(BAD_LINE)
+    assert not state.output_path.exists()
+
+
+def test_save_version_refuses_blocking_rule_violations(tmp_path: Path) -> None:
+    state = ReportState(output_path=tmp_path / "out.txt")
+    state.set_report(
+        {
+            "status": "done",
+            "best_index": 1,
+            "rules": {
+                "items": [
+                    {
+                        "id": "keep-clearance",
+                        "kind": "must",
+                        "text": "Keep the security clearance line.",
+                        "source": "user",
+                        "check": "code",
+                        "severity": "blocking",
+                    }
+                ]
+            },
+            "versions": [
+                {"index": 0, "kind": "original", "text": "Original"},
+                {
+                    "index": 1,
+                    "kind": "round",
+                    "text": "Polished",
+                    "review": {
+                        "flagged_lines": [],
+                        "violations": [{"id": "keep-clearance", "state": "violated"}],
+                    },
+                },
+            ],
+            "totals": {},
+            "config": {},
+            "manifest": {},
+        }
+    )
+
+    with pytest.raises(ValueError, match="blocking rule violation"):
+        state.save_version(1)
 
 
 def test_a_newer_check_replaces_the_verdict_that_gates_saving(tmp_path: Path) -> None:

@@ -29,15 +29,35 @@ class AuditLog:
         verdict: str,  # "approved" or "rejected"
         reviewer: str = "human",
     ) -> None:
-        if self._path is None:
-            return
-        entry = {
+        self._append({
             "ts": datetime.now(tz=UTC).isoformat(),
             "run_id": run_id,
+            "kind": "line",
             "line": line,
             "verdict": verdict,
             "reviewer": reviewer,
-        }
+        })
+
+    def record_rule(
+        self,
+        *,
+        run_id: str,
+        rule_id: str,
+        verdict: str = "waived",
+        reviewer: str = "human",
+    ) -> None:
+        self._append({
+            "ts": datetime.now(tz=UTC).isoformat(),
+            "run_id": run_id,
+            "kind": "rule",
+            "rule_id": rule_id,
+            "verdict": verdict,
+            "reviewer": reviewer,
+        })
+
+    def _append(self, entry: dict[str, Any]) -> None:
+        if self._path is None:
+            return
         with self._lock:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a") as fh:

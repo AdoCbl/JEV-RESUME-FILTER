@@ -6,6 +6,7 @@ from polisher.judge import (
     claim_lines,
     split_claims,
 )
+from polisher.rules import Rule, RuleBook
 from tests.conftest import FakeChoice, FakeNoul, FakeScore, FakeTypeSafeClient, make_review_answers
 
 ORIGINAL = "Led the platform team at Acme Corp for three years. Cut p95 latency by 40%."
@@ -188,3 +189,98 @@ def test_feedback_stays_quiet_when_every_requirement_is_answered() -> None:
     r = review(client, original_resume=ORIGINAL, job_description=JD, draft=DRAFT)
 
     assert "REQUIREMENTS WITH NO EVIDENCE" not in r.feedback()
+
+
+def test_jev_rules_are_batched_into_the_same_review_request() -> None:
+    from polisher.judge import review
+
+    asked: list[set[str]] = []
+
+    class RecordingClient(FakeTypeSafeClient):
+        def system_one(self, *, state, questions, **kwargs):  # type: ignore[override]
+            asked.append(set(questions))
+            return super().system_one(state=state, questions=questions, **kwargs)
+
+    rules = RuleBook(
+        rules=(
+            Rule(
+                id="taste-one",
+                kind="prefer",
+                text="Lead with the migration work.",
+                source="user",
+                check="jev",
+                severity="advisory",
+            ),
+            Rule(
+                id="taste-two",
+                kind="prefer",
+                text="Do not sound boastful.",
+                source="user",
+                check="jev",
+                severity="advisory",
+            ),
+            Rule(
+                id="taste-three",
+                kind="must",
+                text="Headline matches the posting's seniority label.",
+                source="job",
+                check="jev",
+                severity="blocking",
+            ),
+        )
+    )
+    client = RecordingClient(make_review_answers(len(claim_lines(DRAFT))))
+    review(
+        client,
+        original_resume=ORIGINAL,
+        job_description="JD",
+        draft=DRAFT,
+        rulebook=rules,
+    )
+
+    assert len(asked) == 1
+    assert {"rule_taste-one", "rule_taste-two", "rule_taste-three"} <= asked[0]
+
+
+def test_jev_rule_results_reach_the_review() -> None:
+    from polisher.judge import review
+
+    rules = RuleBook(
+        rules=(
+            Rule(
+                id="no-summary",
+                kind="must_not",
+                text="Do not add a summary section.",
+                source="user",
+                check="jev",
+                severity="blocking",
+            ),
+        )
+    )
+    answers = make_review_answers(len(claim_lines(DRAFT)))
+    answers["rule_no-summary"] = FakeNoul(0.9)
+    client = FakeTypeSafeClient(answers)
+
+    r = review(client, original_resume=ORIGINAL, job_description="JD", draft=DRAFT, rulebook=rules)
+
+    assert len(r.rules) == 1
+    assert r.blocking_violations[0].rule_id == "no-summary"
+    assert "BLOCKING RULE VIOLATIONS" in r.feedback()
+
+
+def test_split_requirements_skips_about_us_boilerplate() -> None:
+    from polisher.judge import split_requirements
+
+    jd = """
+ABOUT US
+We are a fast-growing company building logistics tools for the future.
+
+RESPONSIBILITIES
+- Build backend services in Python.
+- Improve distributed systems reliability.
+""".strip()
+
+    reqs = split_requirements(jd)
+
+    assert all("fast-growing company" not in req for req in reqs)
+    assert "Build backend services in Python." in reqs

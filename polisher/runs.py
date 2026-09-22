@@ -116,6 +116,25 @@ def _round_to_dict(round_: Any) -> dict[str, Any]:
             "levels": r.review.levels,
             "quality": r.review.quality,
             "guardrails": r.review.guardrails,
+            "rulebook": [rule.to_dict() for rule in r.review.rulebook.ordered()],
+            "rules": [
+                {
+                    "rule_id": result.rule_id,
+                    "state": result.state,
+                    "findings": list(result.findings),
+                    "probability": result.probability,
+                    "checks": [
+                        {
+                            "name": check.name,
+                            "passed": check.passed,
+                            "message": check.message,
+                            "findings": list(check.findings),
+                        }
+                        for check in result.checks
+                    ],
+                }
+                for result in r.review.rules
+            ],
             "lines": [
                 {
                     "text": line.text,
@@ -141,6 +160,8 @@ def _round_from_dict(data: dict[str, Any]) -> Any:
     from .judge import AuditedLine, Review
     from .loop import Round
     from .metrics import LLMCallMetrics, RequestMetrics
+    from .rules import CodeCheckResult, Rule, RuleBook, RuleResult
+    from .rules_builtin import BUILTIN_RULEBOOK
     from .writer import Draft
 
     dm = data["draft"]["metrics"]
@@ -162,6 +183,41 @@ def _round_from_dict(data: dict[str, Any]) -> Any:
         input_tokens=rm.get("input_tokens"),
         output_tokens=rm.get("output_tokens"),
     )
+    rulebook_data = data["review"].get("rulebook")
+    if rulebook_data:
+        rulebook = RuleBook(
+            rules=tuple(
+                Rule(
+                    id=rule["id"],
+                    kind=rule["kind"],
+                    text=rule["text"],
+                    source=rule["source"],
+                    check=rule["check"],
+                    severity=rule["severity"],
+                )
+                for rule in rulebook_data
+            )
+        )
+    else:
+        rulebook = BUILTIN_RULEBOOK
+    rules = tuple(
+        RuleResult(
+            rule_id=result["rule_id"],
+            state=result["state"],
+            findings=tuple(result.get("findings", [])),
+            probability=result.get("probability"),
+            checks=tuple(
+                CodeCheckResult(
+                    name=check["name"],
+                    passed=check["passed"],
+                    message=check["message"],
+                    findings=tuple(check.get("findings", [])),
+                )
+                for check in result.get("checks", [])
+            ),
+        )
+        for result in data["review"].get("rules", [])
+    )
     review = Review(
         scores=data["review"]["scores"],
         confidences=data["review"]["confidences"],
@@ -181,6 +237,8 @@ def _round_from_dict(data: dict[str, Any]) -> Any:
         biggest_gap=data["review"]["biggest_gap"],
         biggest_gap_confidence=data["review"]["biggest_gap_confidence"],
         gap_distribution=data["review"]["gap_distribution"],
+        rulebook=rulebook,
+        rules=rules,
         evidence=data["review"].get("evidence", {}),
         coverage=data["review"].get("coverage", {}),
         metrics=metrics,

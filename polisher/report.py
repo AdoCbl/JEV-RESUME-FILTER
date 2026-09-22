@@ -14,6 +14,9 @@ from .config import Settings
 from .diff import Diff, line_diff
 from .judge import Review
 from .loop import Round
+from .rules import format_ledger
+from .rules import PRECEDENCE_ORDER, RuleBook, RuleResult
+from .rules_builtin import BUILTIN_RULEBOOK
 from .writer import SYSTEM_PROMPT
 
 ORIGINAL = "original"
@@ -53,12 +56,24 @@ def _writer_prompt_hash() -> str:
     return hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest()[:16]
 
 
-def build_manifest(settings: Settings, run_id: str | None = None) -> dict[str, Any]:
+def _active_rulebook(rulebook: RuleBook | None) -> RuleBook:
+    return BUILTIN_RULEBOOK if rulebook is None else rulebook
+
+
+def build_manifest(
+    settings: Settings,
+    run_id: str | None = None,
+    *,
+    rulebook: RuleBook | None = None,
+) -> dict[str, Any]:
     """Version fingerprint embedded in every payload for reproducibility checks."""
+    active_rulebook = _active_rulebook(rulebook)
     return {
         "run_id": run_id,
         "git_commit": _git_commit(),
         "rubric_hash": _rubric_hash(),
+        "ruleset_hash": active_rulebook.short_hash(),
+        "ruleset_sources": list(active_rulebook.sources()),
         "writer_prompt_hash": _writer_prompt_hash(),
         "writer_model": settings.writer_model,
         "writer_base_url": settings.writer_base_url,
@@ -71,6 +86,39 @@ def build_manifest(settings: Settings, run_id: str | None = None) -> dict[str, A
             "gap_margin": judge.GAP_MARGIN,
         },
     }
+
+
+def _rulebook_payload(rulebook: RuleBook) -> dict[str, Any]:
+    return {
+        "precedence": list(PRECEDENCE_ORDER),
+        "ruleset_hash": rulebook.short_hash(),
+        "ruleset_sources": list(rulebook.sources()),
+        "conflicts": [],
+        "items": [rule.to_dict() for rule in rulebook.ordered()],
+    }
+
+
+def _rule_results_payload(results: tuple[RuleResult, ...]) -> dict[str, Any]:
+    payload = [
+        {
+            "id": result.rule_id,
+            "state": result.state,
+            "probability": None if result.probability is None else round(result.probability, 3),
+            "findings": list(result.findings),
+            "checks": [
+                {
+                    "name": check.name,
+                    "passed": check.passed,
+                    "message": check.message,
+                    "findings": list(check.findings),
+                }
+                for check in result.checks
+            ],
+        }
+        for result in results
+    ]
+    violations = [entry for entry in payload if entry["state"] == "violated"]
+    return {"results": payload, "violations": violations}
 
 
 def _review_payload(review: Review, *, improvement: float | None, is_best: bool) -> dict[str, Any]:
@@ -226,11 +274,13 @@ def build_report(
     status: str,
     saved_index: int | None = None,
     run_id: str | None = None,
+    rulebook: RuleBook | None = None,
 ) -> dict[str, Any]:
     """Assemble the payload for one run, complete or still in progress.
 
     ``status`` is ``"running"`` while the loop is mid-flight; the page polls while it is.
     """
+    active_rulebook = _active_rulebook(rulebook)
     versions = [
         _version(
             index=0,
@@ -250,7 +300,16 @@ def build_report(
             improvement=round_.improvement,
             is_best=best is not None and round_ is best,
         )
+        rule_results = _rule_results_payload(round_.review.rules)
         review["writer"] = round_.draft.metrics.to_dict()
+        review["rule_results"] = rule_results["results"]
+        review["violations"] = rule_results["violations"]
+        review["format"] = format_ledger(round_.draft.text)
+        review["posting"] = judge.posting_report(
+            job_description,
+            round_.draft.text,
+            original_resume=resume,
+        )
         versions.append(
             _version(
                 index=round_.number,
@@ -271,7 +330,14 @@ def build_report(
         "stop_reason": stop_reason,
         "best_index": None if best is None else best.number,
         "paths": paths,
-        "manifest": build_manifest(settings, run_id=run_id),
+        "manifest": build_manifest(settings, run_id=run_id, rulebook=active_rulebook),
+        "rules": _rulebook_payload(active_rulebook),
+        "format": format_ledger(best.draft.text if best is not None else resume),
+        "posting": judge.posting_report(
+            job_description,
+            best.draft.text if best is not None else resume,
+            original_resume=resume,
+        ),
         "config": {
             "writer_model": settings.writer_model,
             "reviewer_model": settings.reviewer_label,

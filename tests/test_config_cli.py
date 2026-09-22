@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from polisher.config import Settings, load_settings, read_input
+from polisher.rules import Rule, RuleBook
 
 # ── config tests ──────────────────────────────────────────────────────────────
 
@@ -193,9 +195,82 @@ def test_diff_runs_matching_rubrics(tmp_path: Path) -> None:
     b.write_text(json.dumps(_make_payload(0.85, "b")))
 
     buf = io.StringIO()
-    with __import__("unittest.mock", fromlist=["patch"]).patch("sys.stdout", buf):
+    with patch("sys.stdout", buf):
         diff_runs(a, b)
     assert "overall" in buf.getvalue().lower() or "Diff" in buf.getvalue()
+
+
+def test_diff_runs_warns_on_ruleset_change(tmp_path: Path) -> None:
+    import io
+
+    from polisher.cli import diff_runs
+    from polisher.report import build_manifest
+
+    s = Settings(
+        typesafe_api_key="ts", typesafe_model=None,
+        writer_api_key="w", writer_model="m", writer_base_url="https://x.com",
+        max_iterations=1, min_improvement=0.02, target_score=0.9, patience=2,
+    )
+    rulebook_a = RuleBook(
+        rules=(
+            Rule(
+                id="keep-clearance",
+                kind="must",
+                text="Keep the clearance line.",
+                source="user",
+                check="code",
+                severity="blocking",
+            ),
+        )
+    )
+    rulebook_b = RuleBook(
+        rules=(
+            Rule(
+                id="no-summary",
+                kind="must_not",
+                text="Do not add a summary section.",
+                source="user",
+                check="code",
+                severity="blocking",
+            ),
+        )
+    )
+
+    def _make_payload(manifest: dict) -> dict:
+        return {
+            "manifest": manifest,
+            "best_index": 1,
+            "versions": [
+                {"index": 0, "kind": "original"},
+                {
+                    "index": 1,
+                    "kind": "round",
+                    "review": {
+                        "overall": 0.75,
+                        "quality": 0.75,
+                        "groundedness": 1.0,
+                        "scores": {
+                            "jd_alignment": {"score": 3.0},
+                            "evidence_quality": {"score": 3.0},
+                            "jd_keyword_coverage": {"score": 3.0},
+                            "clarity_structure": {"score": 3.0},
+                            "impact_ownership": {"score": 3.0},
+                        },
+                    },
+                },
+            ],
+        }
+
+    a = tmp_path / "a.json"
+    b = tmp_path / "b.json"
+    a.write_text(json.dumps(_make_payload(build_manifest(s, rulebook=rulebook_a))))
+    b.write_text(json.dumps(_make_payload(build_manifest(s, rulebook=rulebook_b))))
+
+    buf = io.StringIO()
+    with patch("sys.stdout", buf):
+        diff_runs(a, b)
+
+    assert "ruleset hashes differ" in buf.getvalue().lower()
 
 
 def test_purge_run_deletes_directory(tmp_path: Path) -> None:

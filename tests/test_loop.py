@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from polisher.config import Settings
 from polisher.loop import PolisherRun, attempt_history, polish, rejected_phrasings
+from polisher.rules import Rule, RuleBook
 from tests.conftest import FakeOpenAIClient, FakeTypeSafeClient
 
 RESUME = "Jane Smith\nSoftware Engineer\n\nBuilt the billing service at Acme."
@@ -191,3 +192,46 @@ def test_human_rejections_lead_the_rejected_phrasings_block() -> None:
     assert bullets.count(f"- {REJECTED}") == 1, "and is not repeated as a JEV line"
     assert "- JEV flagged this" in bullets
     assert "rejected by a human" in block
+
+
+def test_blocking_rule_violations_reach_the_next_writer_round() -> None:
+    import polisher.loop as loop
+
+    seen: list[str | None] = []
+    real_write = loop.write_draft
+
+    def spy(writer, **kwargs):
+        seen.append(kwargs.get("feedback"))
+        return real_write(writer, **kwargs)
+
+    answers = {
+        **__import__("tests.conftest", fromlist=["make_review_answers"]).make_review_answers(
+            len(__import__("polisher.judge", fromlist=["claim_lines"]).claim_lines(RESUME))
+        ),
+        "rule_no-summary": __import__("tests.conftest", fromlist=["FakeNoul"]).FakeNoul(0.9),
+    }
+    rules = RuleBook(
+        rules=(
+            Rule(
+                id="no-summary",
+                kind="must_not",
+                text="Do not add a summary section.",
+                source="user",
+                check="jev",
+                severity="blocking",
+            ),
+        )
+    )
+    s = _settings(max_iterations=2, target_score=0.10)
+
+    with (
+        patch.object(loop, "write_draft", spy),
+        patch("polisher.loop.TypeSafeClient", return_value=FakeTypeSafeClient(answers)),
+        patch("polisher.loop.OpenAI", return_value=FakeOpenAIClient()),
+    ):
+        result = loop.polish(s, RESUME, JD, reviewer=FakeTypeSafeClient(answers), rulebook=rules)
+
+    assert len(result.rounds) == 2
+    assert seen[1] is not None
+    assert "BLOCKING RULE VIOLATIONS" in seen[1]
+    assert "Do not add a summary section." in seen[1]

@@ -21,6 +21,7 @@ Two details keep the loop honest and cheap:
 """
 
 import re
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from math import fsum
@@ -30,6 +31,8 @@ from typing import Any
 from typesafe_sdk import Choice, Noul, NoulCriteria, Score, TypeSafeClient
 
 from .metrics import RequestMetrics, timed_call
+from .rules import RuleBook, RuleResult, evaluate_rulebook
+from .rules_builtin import BUILTIN_RULEBOOK, code_checks_for_rulebook
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 
@@ -44,6 +47,41 @@ MIN_CLAIM_CHARS = 12  # shorter lines are headings or contact details, not claim
 MAX_AUDIT_LINES = 60  # cap on the per-line grounding questions in one round
 MAX_REQUIREMENTS = 20  # cap on JD requirements extracted for the coverage matrix
 MAX_UNCOVERED_IN_FEEDBACK = 8  # cap on unanswered requirements quoted back to the writer
+RULE_VIOLATION_FLOOR = 0.5  # at or above this a JEV rule counts as violated
+
+_POSTING_HEADINGS = {
+    "requirements": "requirements",
+    "qualification": "requirements",
+    "qualifications": "requirements",
+    "what we're looking for": "requirements",
+    "what we are looking for": "requirements",
+    "must have": "requirements",
+    "preferred": "requirements",
+    "nice to have": "requirements",
+    "responsibilities": "responsibilities",
+    "what you'll do": "responsibilities",
+    "what you will do": "responsibilities",
+    "about us": "boilerplate",
+    "about the company": "boilerplate",
+    "benefits": "boilerplate",
+    "who we are": "boilerplate",
+    "why join": "boilerplate",
+    "compensation": "boilerplate",
+    "equal opportunity": "boilerplate",
+}
+_POSTING_BOILERPLATE_PREFIXES = (
+    "we are",
+    "our company",
+    "we offer",
+    "benefits include",
+    "equal opportunity",
+)
+_POSTING_STOPWORDS = frozenset({
+    "and", "the", "for", "with", "that", "this", "your", "you", "our", "will",
+    "are", "have", "has", "into", "from", "than", "their", "them", "about",
+    "years", "year", "using", "able", "ability", "experience", "preferred",
+    "required", "minimum", "must", "strong", "plus", "bonus", "team",
+})
 
 # ── Quality dimensions ────────────────────────────────────────────────────────
 # One Score question per dimension, each measuring one thing. The weights are code,
@@ -291,6 +329,7 @@ def build_questions(
     lines: tuple[str, ...] | list[str],
     original_lines: tuple[str, ...] | None = None,
     requirements: tuple[str, ...] | None = None,
+    rulebook: RuleBook | None = None,
 ) -> dict[str, Noul | Choice | Score]:
     """All questions for one round, in a single request (they run in parallel).
 
@@ -303,10 +342,12 @@ def build_questions(
     When ``requirements`` is provided, a ``Noul`` question is added for each JD
     requirement to measure whether the draft addresses it.
     """
+    active_rulebook = BUILTIN_RULEBOOK if rulebook is None else rulebook
     questions: dict[str, Noul | Choice | Score] = {}
     questions.update(DIMENSIONS)
     questions.update(GUARDRAILS)
     questions["biggest_gap"] = BIGGEST_GAP
+    questions.update(rule_questions(active_rulebook))
     questions.update(line_questions(lines))
     for index, line in enumerate(lines):
         # Source-line evidence: which original line backs this draft line?
@@ -341,6 +382,28 @@ def build_questions(
                 },
                 criteria=line_criteria,
             )
+    return questions
+
+
+def rule_question_id(rule_id: str) -> str:
+    return f"rule_{rule_id}"
+
+
+def rule_questions(rulebook: RuleBook) -> dict[str, Noul]:
+    questions: dict[str, Noul] = {}
+    for rule in rulebook.ordered():
+        if rule.check != "jev":
+            continue
+        questions[rule_question_id(rule.id)] = Noul(
+            instructions={
+                "rule": rule.text,
+                "question": "Does `candidate_resume` violate this rule?",
+            },
+            criteria=NoulCriteria(
+                true=f"`candidate_resume` violates this rule: {rule.text}",
+                false=f"`candidate_resume` follows this rule: {rule.text}",
+            ),
+        )
     return questions
 
 
@@ -382,18 +445,112 @@ def claim_lines(resume: str, limit: int = MAX_AUDIT_LINES) -> tuple[str, ...]:
 def split_requirements(jd: str, limit: int = MAX_REQUIREMENTS) -> tuple[str, ...]:
     """Extract individual requirements from a job description.
 
-    Takes each non-blank, sufficiently-long line, strips list markers, and returns
-    the first ``limit`` as candidates for the coverage matrix.
+    Only lines classified as requirements or responsibilities are candidates for the
+    coverage matrix; boilerplate such as "About us" is kept out of it.
     """
-    reqs = []
+    return tuple(item["text"] for item in _posting_items(jd, limit) if item["section"] != "boilerplate")
+
+
+def posting_report(
+    job_description: str,
+    draft: str,
+    *,
+    original_resume: str | None = None,
+    limit: int = MAX_REQUIREMENTS,
+) -> dict[str, Any]:
+    items = _posting_items(job_description, limit)
+    relevant = [item for item in items if item["section"] != "boilerplate"]
+    salient = _salient_terms(item["text"] for item in relevant)
+    draft_hits = [term for term in salient if _contains_term(draft, term)]
+    supported_missing = []
+    if original_resume is not None:
+        supported_missing = [
+            term
+            for term in salient
+            if _contains_term(original_resume, term) and not _contains_term(draft, term)
+        ]
+    return {
+        "requirements": relevant,
+        "sections": {
+            "requirements": [item["text"] for item in items if item["section"] == "requirements"],
+            "responsibilities": [item["text"] for item in items if item["section"] == "responsibilities"],
+            "boilerplate": [item["text"] for item in items if item["section"] == "boilerplate"],
+        },
+        "keywords": {
+            "salient": salient,
+            "named_in_draft": draft_hits,
+            "supported_missing": supported_missing,
+        },
+    }
+
+
+def _posting_items(jd: str, limit: int) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    relevant_count = 0
+    section = "unstructured"
     for raw in jd.splitlines():
-        line = raw.strip().lstrip("-•*–—·1234567890.)").strip()
-        if len(line) < 20 or not any(c.isalpha() for c in line):
+        stripped = raw.strip()
+        if not stripped:
             continue
-        reqs.append(line)
-        if len(reqs) == limit:
-            break
-    return tuple(reqs)
+        heading = _posting_heading(stripped)
+        if heading is not None:
+            section = heading
+            continue
+        line = stripped.lstrip("-•*–—·1234567890.)").strip()
+        if len(line) < 20 or not any(char.isalpha() for char in line):
+            continue
+        kind = _posting_section_for_line(line, section)
+        priority = _posting_priority(line, kind)
+        items.append({"text": line, "section": kind, "priority": priority})
+        if kind != "boilerplate":
+            relevant_count += 1
+            if relevant_count == limit:
+                break
+    return items
+
+
+def _posting_heading(line: str) -> str | None:
+    normalized = line.strip().rstrip(":").lower()
+    for marker, kind in _POSTING_HEADINGS.items():
+        if marker in normalized:
+            return kind
+    return None
+
+
+def _posting_section_for_line(line: str, current_section: str) -> str:
+    lowered = line.lower()
+    if current_section in ("requirements", "responsibilities", "boilerplate"):
+        return current_section
+    if lowered.startswith(_POSTING_BOILERPLATE_PREFIXES):
+        return "boilerplate"
+    if any(token in lowered for token in ("responsible for", "you will", "build", "design", "lead ")):
+        return "responsibilities"
+    return "requirements"
+
+
+def _posting_priority(line: str, section: str) -> str:
+    lowered = line.lower()
+    if any(token in lowered for token in ("preferred", "nice to have", "bonus", "plus")):
+        return "nice_to_have"
+    if section == "responsibilities":
+        return "responsibility"
+    return "must_have"
+
+
+def _salient_terms(lines: list[str] | tuple[str, ...] | Any, limit: int = 12) -> list[str]:
+    counts: Counter[str] = Counter()
+    for line in lines:
+        words = [
+            word.lower()
+            for word in re.findall(r"[A-Za-z][A-Za-z0-9+#./-]*", line)
+            if len(word) >= 3 and word.lower() not in _POSTING_STOPWORDS
+        ]
+        counts.update(words)
+    return [term for term, _ in counts.most_common(limit)]
+
+
+def _contains_term(text: str, term: str) -> bool:
+    return re.search(rf"\b{re.escape(term)}\b", text, flags=re.IGNORECASE) is not None
 
 
 def coverage_question_id(index: int) -> str:
@@ -435,6 +592,8 @@ class Review:
     biggest_gap_confidence: float
     gap_distribution: dict[str, float]
     metrics: RequestMetrics
+    rulebook: RuleBook
+    rules: tuple[RuleResult, ...]
     # draft_line_text → original_line_text (None when no original line supports it)
     evidence: dict[str, str | None] = field(default_factory=dict)
     # requirement_text → draft_line_text that addresses it (None when uncovered)
@@ -490,6 +649,28 @@ class Review:
         return tuple(name for name, c in self.confidences.items() if c < CONFIDENCE_FLOOR)
 
     @property
+    def violations(self) -> tuple[RuleResult, ...]:
+        return tuple(result for result in self.rules if result.state == "violated")
+
+    @property
+    def blocking_violations(self) -> tuple[RuleResult, ...]:
+        by_id = {rule.id: rule for rule in self.rulebook}
+        return tuple(
+            result
+            for result in self.violations
+            if by_id[result.rule_id].severity == "blocking"
+        )
+
+    @property
+    def advisory_violations(self) -> tuple[RuleResult, ...]:
+        by_id = {rule.id: rule for rule in self.rulebook}
+        return tuple(
+            result
+            for result in self.violations
+            if by_id[result.rule_id].severity == "advisory"
+        )
+
+    @property
     def weakest(self) -> str:
         """The lowest-scoring dimension, relative to its top level."""
         return min(self.scores, key=lambda name: self.scores[name] / TOP_LEVEL)
@@ -543,6 +724,7 @@ class Review:
 
     def feedback(self) -> str:
         """The review written as the writer's next instruction block."""
+        by_id = {rule.id: rule for rule in self.rulebook}
         lines = ["SCORES (0-4, with the weight each carries in the overall number)"]
         for name, weight in WEIGHTS.items():
             lines.append(
@@ -553,6 +735,23 @@ class Review:
             f"  overall: quality {self.quality:.2f} x groundedness {self.groundedness:.2f}"
             f" = {self.overall:.2f}"
         )
+        if self.blocking_violations:
+            lines.append("BLOCKING RULE VIOLATIONS (fix these before anything else)")
+            for result in self.blocking_violations:
+                rule = by_id[result.rule_id]
+                probability = ""
+                if result.probability is not None:
+                    probability = f" [{result.probability:.2f}]"
+                lines.append(f"  -{probability} {rule.text}")
+                if result.findings:
+                    lines.append(f"    evidence: {'; '.join(result.findings)}")
+        if self.advisory_violations:
+            lines.append("ADVISORY RULE VIOLATIONS")
+            for result in self.advisory_violations:
+                rule = by_id[result.rule_id]
+                lines.append(f"  - {rule.text}")
+                if result.findings:
+                    lines.append(f"    evidence: {'; '.join(result.findings)}")
         if self.blocked:
             lines.append(
                 "BLOCKING: the reviewer judges this draft to contain claims the original resume "
@@ -619,6 +818,7 @@ def review(
     draft: str,
     carried: Mapping[str, float] | None = None,
     carried_evidence: Mapping[str, str | None] | None = None,
+    rulebook: RuleBook | None = None,
 ) -> Review:
     """Score one draft, check it for fabrication, audit its lines, and measure JD coverage.
 
@@ -634,6 +834,7 @@ def review(
     survived unchanged are not re-asked, so the evidence cost rises only by one Choice per
     changed line.
     """
+    active_rulebook = BUILTIN_RULEBOOK if rulebook is None else rulebook
     lines = claim_lines(draft)
     known = carried or {}
     fresh = tuple(dict.fromkeys(line for line in lines if line not in known))
@@ -645,7 +846,9 @@ def review(
         "candidate_resume": draft,
     }
     response, metrics = timed_call(
-        client, state=state, questions=build_questions(fresh, original_lines, requirements)
+        client,
+        state=state,
+        questions=build_questions(fresh, original_lines, requirements, active_rulebook),
     )
     answers = response.answers
 
@@ -704,6 +907,7 @@ def review(
                 coverage[req] = None
 
     gap = answers["biggest_gap"]
+    rules = settle_rules(active_rulebook, draft, answers)
     return Review(
         scores=scores,
         confidences=confidences,
@@ -716,9 +920,41 @@ def review(
         biggest_gap_confidence=gap.confidence,
         gap_distribution=dict(gap.probabilities),
         metrics=metrics,
+        rulebook=active_rulebook,
+        rules=rules,
         evidence=evidence,
         coverage=coverage,
     )
+
+
+def settle_rules(
+    rulebook: RuleBook,
+    draft: str,
+    answers: Mapping[str, Any],
+) -> tuple[RuleResult, ...]:
+    configured = code_checks_for_rulebook(rulebook)
+    code_results = {
+        result.rule_id: result
+        for result in evaluate_rulebook(rulebook, draft, code_checks=configured)
+    }
+    settled: list[RuleResult] = []
+    for rule in rulebook.ordered():
+        if rule.check == "jev":
+            try:
+                probability = answers[rule_question_id(rule.id)].noul
+            except (KeyError, AttributeError):
+                settled.append(RuleResult(rule_id=rule.id, state="not_checkable"))
+                continue
+            settled.append(
+                RuleResult(
+                    rule_id=rule.id,
+                    state="violated" if probability >= RULE_VIOLATION_FLOOR else "passed",
+                    probability=probability,
+                )
+            )
+            continue
+        settled.append(code_results[rule.id])
+    return tuple(settled)
 
 
 def settle_lines(

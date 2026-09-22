@@ -15,6 +15,7 @@ from typesafe_sdk import TypeSafeClient
 from . import judge
 from .config import Settings
 from .judge import Review
+from .rules import RuleBook
 from .writer import Draft, write_draft
 
 
@@ -107,7 +108,7 @@ def stop_reason(current: Round, settings: Settings, misses: int) -> str | None:
     loop tolerates ``settings.patience`` non-improving rounds before it stops.
     """
     review = current.review
-    if review.overall >= settings.target_score and not review.blocked:
+    if review.overall >= settings.target_score and not review.blocked and not review.blocking_violations:
         return f"target reached (overall {review.overall:.2f} >= {settings.target_score:.2f})"
     if misses >= settings.patience:
         last = current.improvement
@@ -127,6 +128,7 @@ def polish(
     prior_rounds: list[Round] | None = None,
     human_rejections: Callable[[], list[str]] | None = None,
     reviewer: TypeSafeClient | None = None,
+    rulebook: RuleBook | None = None,
 ) -> PolisherRun:
     """Write, review, keep the best, feed the review back, and stop when it stops paying.
 
@@ -197,6 +199,7 @@ def polish(
                     draft=draft.text,
                     carried=carried,
                     carried_evidence=carried_evidence,
+                    rulebook=rulebook,
                 )
                 reviewed = True
                 improvement = None if best is None else review.overall - best.review.overall

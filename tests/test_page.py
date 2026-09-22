@@ -163,3 +163,15 @@ def test_review_buttons_are_addressed_by_position_not_by_line_text() -> None:
     """The line text is read back from the payload on click, never written into markup."""
     assert 'data-line-index="${i}"' in _TEMPLATE
     assert "JSON.stringify(t)" not in _TEMPLATE
+
+
+def test_template_removes_recomputed_score_lines() -> None:
+    assert 'leaderRow("mean line grounding"' not in _TEMPLATE
+    assert 'leaderRow("fabrication risk"' not in _TEMPLATE
+    assert "grounded = 1 − fabrication risk" not in _TEMPLATE
+
+
+def test_template_contains_verdict_band_labels() -> None:
+    assert "Ready to send" in _TEMPLATE
+    assert "Needs your review" in _TEMPLATE
+    assert "Not grounded" in _TEMPLATE

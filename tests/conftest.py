@@ -84,6 +84,8 @@ class FakeTypeSafeClient:
                 resolved[key] = FakeNoul(0.1)
             elif key.startswith("claim_"):
                 resolved[key] = FakeNoul(0.1)
+            elif key.startswith("rule_"):
+                resolved[key] = FakeNoul(0.1)
             elif key.startswith("src_"):
                 resolved[key] = FakeChoice(choice="none")
             elif key.startswith("cov_"):

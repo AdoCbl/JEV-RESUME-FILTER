@@ -189,6 +189,11 @@ def diff_runs(a: Path, b: Path) -> None:
             f"WARNING: rubric hashes differ ({mfa['rubric_hash']} vs {mfb['rubric_hash']})."
             " Scores are not on the same scale."
         )
+    if mfa.get("ruleset_hash") and mfb.get("ruleset_hash") and mfa["ruleset_hash"] != mfb["ruleset_hash"]:
+        print(
+            f"WARNING: ruleset hashes differ ({mfa['ruleset_hash']} vs {mfb['ruleset_hash']})."
+            " The rulebook changed between runs."
+        )
 
     def best_review(payload: dict) -> dict | None:
         bi = payload.get("best_index")
@@ -580,6 +585,9 @@ def main(argv: list[str] | None = None) -> None:
         state.original_resume = resume
         state.on_review = lambda line, verdict: audit_log.record(
             run_id=run_id, line=line, verdict=verdict
+        )
+        state.on_waive = lambda rule_id: audit_log.record_rule(
+            run_id=run_id, rule_id=rule_id
         )
         from typesafe_sdk import TypeSafeClient as _TSC
 
